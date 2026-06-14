@@ -1,14 +1,12 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
 
-// Setup type definitions for built-in Supabase Deno environments
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*', // Adjust for production e.g., 'https://yourdomain.com'
+  'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-functions-secret',
 };
 
 serve(async (req) => {
-  // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -38,10 +36,8 @@ serve(async (req) => {
     if (logError) throw new Error(`Failed to create log: ${logError.message}`);
     const logId = logData.id;
 
-    let campaignsUpdated = 0;
-
     try {
-      // Fetch the LinkedIn Access Token
+      // 3. Fetch the LinkedIn Access Token
       const { data: tokenData, error: tokenError } = await supabaseClient
         .from('linkedin_tokens')
         .select('access_token, expires_at')
@@ -53,38 +49,119 @@ serve(async (req) => {
       }
 
       const { access_token, expires_at } = tokenData;
-
-      // Check if token is expired
       if (new Date(expires_at) < new Date()) {
-        throw new Error('LinkedIn access token is expired. Please reconnect LinkedIn.');
+        throw new Error('LinkedIn access token is expired. Please reconnect.');
       }
 
-      // Fetch Campaigns from LinkedIn API
-      const campaignsUrl = 'https://api.linkedin.com/rest/adAccounts?q=search'; // Example endpoint, in a real app this would fetch actual campaigns. We'll simulate fetching a few campaigns or we can make a real call to the correct endpoint if the user provides correct ad account IDs. Since we don't have the ad account ID, let's fetch adAccounts first or just assume a standard campaign endpoint.
-      // Actually, fetching campaigns requires Ad Account ID. Without it, we might just fetch the user profile to prove it works.
-      // Let's use the /v2/me endpoint to just prove we have a valid token, and then simulate campaigns for the demo unless we build out full ad account selection.
-      // For this implementation, since we need to insert campaigns, we will just fetch the profile to validate token, then insert dummy updated campaigns, OR we can try to fetch campaigns if they have correct permissions. Let's do a basic profile fetch to validate token, then update campaign metrics dynamically.
-      
-      const profileResponse = await fetch('https://api.linkedin.com/v2/userinfo', {
-        headers: {
-          'Authorization': `Bearer ${access_token}`,
-          'X-Restli-Protocol-Version': '2.0.0'
+      const version = Deno.env.get('LINKEDIN_API_VERSION') || '202404';
+      const apiHeaders = {
+        'Authorization': `Bearer ${access_token}`,
+        'LinkedIn-Version': version,
+        'X-Restli-Protocol-Version': '2.0.0',
+        'Content-Type': 'application/json',
+      };
+
+      // 4. Resolve Ad Account(s)
+      let adAccountId = Deno.env.get('LINKEDIN_AD_ACCOUNT_ID');
+      if (!adAccountId) {
+        // Auto-discover the first accessible Ad Account
+        const accountsRes = await fetch('https://api.linkedin.com/rest/adAccounts?q=search', { headers: apiHeaders });
+        if (!accountsRes.ok) throw new Error(`Failed to fetch Ad Accounts: ${await accountsRes.text()}`);
+        const accountsData = await accountsRes.json();
+        if (!accountsData.elements || accountsData.elements.length === 0) {
+          await supabaseClient
+            .from('ingestion_log')
+            .update({ status: 'success', finished_at: new Date().toISOString(), campaigns_updated: 0 })
+            .eq('id', logId);
+
+          return new Response(JSON.stringify({ success: true, campaigns_updated: 0 }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
         }
-      });
-
-      if (!profileResponse.ok) {
-        const errText = await profileResponse.text();
-        throw new Error(`LinkedIn API Error: ${errText}`);
+        adAccountId = accountsData.elements[0].id;
       }
 
-      // We successfully authenticated. In a real scenario, we'd loop through Ad Accounts -> Campaigns -> Analytics here.
-      // Since we don't have an Ad Account ID configured, we will simulate the ingestion success with dynamic data for now,
-      // but the OAuth flow itself is fully real.
-      
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      campaignsUpdated = 3;
+      const accountUrn = `urn:li:sponsoredAccount:${adAccountId}`;
 
-      // 3. Mark success
+      // 5. Fetch Campaigns for the Ad Account
+      const campaignsUrl = `https://api.linkedin.com/rest/adCampaigns?q=search&search=(account:(values:List(${accountUrn})))`;
+      const campaignsRes = await fetch(campaignsUrl, { headers: apiHeaders });
+      if (!campaignsRes.ok) throw new Error(`Failed to fetch campaigns: ${await campaignsRes.text()}`);
+      const campaignsData = await campaignsRes.json();
+
+      let campaignsUpdated = 0;
+
+      for (const rawCamp of (campaignsData.elements || [])) {
+        // Map LinkedIn statuses to DB constraint: 'ACTIVE' | 'COMPLETED' | 'PAUSED'
+        let mappedStatus: 'ACTIVE' | 'COMPLETED' | 'PAUSED' = 'PAUSED';
+        if (rawCamp.status === 'ACTIVE') mappedStatus = 'ACTIVE';
+        if (rawCamp.status === 'COMPLETED') mappedStatus = 'COMPLETED';
+
+        // Categorize campaigns into funnel stages (TOFU / MOFU / BOFU) using custom rules
+        let funnelStage: 'TOFU' | 'MOFU' | 'BOFU' = 'TOFU';
+        const nameLower = rawCamp.name.toLowerCase();
+        if (nameLower.includes('mofu') || nameLower.includes('consideration') || nameLower.includes('traffic')) {
+          funnelStage = 'MOFU';
+        } else if (nameLower.includes('bofu') || nameLower.includes('conversion') || nameLower.includes('lead')) {
+          funnelStage = 'BOFU';
+        }
+
+        // Upsert Campaign details in campaigns table
+        const { data: dbCampaign, error: upsertErr } = await supabaseClient
+          .from('campaigns')
+          .upsert({
+            linkedin_id: rawCamp.id,
+            name: rawCamp.name,
+            status: mappedStatus,
+            funnel_stage: funnelStage,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'linkedin_id' })
+          .select('id')
+          .single();
+
+        if (upsertErr || !dbCampaign) continue;
+
+        // 6. Fetch Daily Analytics metrics for this campaign (last 30 days)
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        
+        const dateRangeQuery = `(start:(day:${thirtyDaysAgo.getDate()},month:${thirtyDaysAgo.getMonth() + 1},year:${thirtyDaysAgo.getFullYear()}),end:(day:${new Date().getDate()},month:${new Date().getMonth() + 1},year:${new Date().getFullYear()}))`;
+        const campaignUrn = rawCamp.id.startsWith('urn:li:') ? rawCamp.id : `urn:li:sponsoredCampaign:${rawCamp.id}`;
+        const analyticsUrl = `https://api.linkedin.com/rest/adAnalytics?q=analytics&pivot=CAMPAIGN&dateRange=${dateRangeQuery}&timeGranularity=DAILY&campaigns=List(${campaignUrn})`;
+
+        const analyticsRes = await fetch(analyticsUrl, { headers: apiHeaders });
+        if (analyticsRes.ok) {
+          const analyticsData = await analyticsRes.json();
+          
+          for (const stat of (analyticsData.elements || [])) {
+            const dateStart = `${stat.dateRange.start.year}-${String(stat.dateRange.start.month).padStart(2, '0')}-${String(stat.dateRange.start.day).padStart(2, '0')}`;
+            const dateEnd = `${stat.dateRange.end.year}-${String(stat.dateRange.end.month).padStart(2, '0')}-${String(stat.dateRange.end.day).padStart(2, '0')}`;
+            
+            const impressions = stat.impressions || 0;
+            const clicks = stat.clicks || 0;
+            const spend = Number(stat.costInLocalCurrency) || 0;
+            const leads = stat.conversions || 0;
+
+            await supabaseClient
+              .from('campaign_metrics')
+              .upsert({
+                campaign_id: dbCampaign.id,
+                date_range_start: dateStart,
+                date_range_end: dateEnd,
+                impressions,
+                clicks,
+                spend_inr: spend,
+                spend_eur: spend * 0.011, // Standard approximate Conversion Rate
+                ctr: impressions > 0 ? (clicks / impressions) : 0,
+                cpc_inr: clicks > 0 ? (spend / clicks) : 0,
+                leads,
+              }, { onConflict: 'campaign_id,date_range_start,date_range_end' });
+          }
+        }
+        campaignsUpdated++;
+      }
+
+      // 7. Mark success log
       await supabaseClient
         .from('ingestion_log')
         .update({ status: 'success', finished_at: new Date().toISOString(), campaigns_updated: campaignsUpdated })
@@ -93,13 +170,12 @@ serve(async (req) => {
       return new Response(JSON.stringify({ success: true, campaigns_updated: campaignsUpdated }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
+
     } catch (innerError: any) {
-      // Mark failed
       await supabaseClient
         .from('ingestion_log')
         .update({ status: 'failed', finished_at: new Date().toISOString(), error_message: innerError.message })
         .eq('id', logId);
-
       throw innerError;
     }
   } catch (error: any) {

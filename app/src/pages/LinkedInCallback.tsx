@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useQueryClient } from '@tanstack/react-query';
@@ -9,6 +9,7 @@ export default function LinkedInCallback() {
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
   const [errorMsg, setErrorMsg] = useState('');
+  const calledRef = useRef(false);
 
   useEffect(() => {
     const searchParams = new URLSearchParams(location.search);
@@ -27,6 +28,9 @@ export default function LinkedInCallback() {
       setErrorMsg('No authorization code found in URL.');
       return;
     }
+
+    if (calledRef.current) return;
+    calledRef.current = true;
 
     const exchangeCode = async () => {
       try {

@@ -114,8 +114,6 @@ export function useLinkedInConnection() {
     queryFn: async () => {
       const { data, error } = await supabase.rpc('has_linkedin_connection');
       if (error) {
-        // Fallback if RPC doesn't exist, we can try to select from the table,
-        // but RLS might block it. Let's just try selecting and limit 1.
         const { data: fallbackData, error: fallbackError } = await supabase
           .from('linkedin_tokens')
           .select('id')
@@ -127,5 +125,18 @@ export function useLinkedInConnection() {
     },
     staleTime: STALE_TIME,
     gcTime: GC_TIME,
+  });
+}
+
+export function useDisconnectLinkedIn() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase.rpc('disconnect_linkedin');
+      if (error) throw new Error(error.message);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['linkedin_connection'] });
+    },
   });
 }
