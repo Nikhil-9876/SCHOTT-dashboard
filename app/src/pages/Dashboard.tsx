@@ -15,9 +15,6 @@ function sumMetric(campaigns: CampaignWithMetrics[], key: keyof NonNullable<Camp
 
 export default function Dashboard() {
   const { data: all, isLoading, isError, refetch } = useCampaignMetrics();
-  const { data: tofu } = useCampaignMetrics('TOFU');
-  const { data: mofu } = useCampaignMetrics('MOFU');
-  const { data: bofu } = useCampaignMetrics('BOFU');
 
   if (isLoading) {
     return (
@@ -72,9 +69,9 @@ export default function Dashboard() {
   const totalSpendEur = sumMetric(all, 'spend_eur');
   const totalReach = sumMetric(all, 'reach');
 
-  const tofuImpressions = sumMetric(tofu ?? [], 'impressions');
-  const mofuImpressions = sumMetric(mofu ?? [], 'impressions');
-  const bofuImpressions = sumMetric(bofu ?? [], 'impressions');
+  const tofuImpressions = sumMetric(all.filter(c => c.funnel_stage === 'TOFU'), 'impressions');
+  const mofuImpressions = sumMetric(all.filter(c => c.funnel_stage === 'MOFU'), 'impressions');
+  const bofuImpressions = sumMetric(all.filter(c => c.funnel_stage === 'BOFU'), 'impressions');
 
   const maxImp = Math.max(tofuImpressions, mofuImpressions, bofuImpressions);
 

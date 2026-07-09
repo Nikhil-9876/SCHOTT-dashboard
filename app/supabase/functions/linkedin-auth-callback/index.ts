@@ -23,7 +23,7 @@ serve(async (req) => {
     const clientSecret = Deno.env.get('LINKEDIN_CLIENT_SECRET');
 
     if (!clientId || !clientSecret) {
-      throw new Error('LinkedIn Client ID or Secret not configured');
+      throw new Error('LinkedIn Client ID or Secret is not configured in Supabase Edge Function secrets.');
     }
 
     // Exchange code for token
@@ -84,6 +84,7 @@ serve(async (req) => {
     });
 
   } catch (error: any) {
+    console.error('LinkedIn auth callback failed:', error?.message ?? error);
     return new Response(JSON.stringify({ error: error.message }), {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

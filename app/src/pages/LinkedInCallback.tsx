@@ -3,6 +3,30 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useQueryClient } from '@tanstack/react-query';
 
+async function getFunctionErrorMessage(error: unknown): Promise<string> {
+  const fallback = error instanceof Error
+    ? error.message
+    : 'An error occurred while linking your account.';
+
+  const context = (error as { context?: unknown })?.context;
+  if (!(context instanceof Response)) return fallback;
+
+  try {
+    const payload = await context.clone().json();
+    if (typeof payload?.error === 'string') return payload.error;
+    if (typeof payload?.message === 'string') return payload.message;
+  } catch {
+    try {
+      const text = await context.clone().text();
+      if (text) return text;
+    } catch {
+      return fallback;
+    }
+  }
+
+  return fallback;
+}
+
 export default function LinkedInCallback() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -41,7 +65,7 @@ export default function LinkedInCallback() {
           }
         });
 
-        if (invokeError) throw new Error(invokeError.message);
+        if (invokeError) throw invokeError;
 
         setStatus('success');
         // Invalidate to refresh connection status
@@ -51,10 +75,10 @@ export default function LinkedInCallback() {
         setTimeout(() => {
           navigate('/');
         }, 2000);
-      } catch (err: any) {
+      } catch (err) {
         console.error('Failed to exchange code:', err);
         setStatus('error');
-        setErrorMsg(err.message || 'An error occurred while linking your account.');
+        setErrorMsg(await getFunctionErrorMessage(err));
       }
     };
 
