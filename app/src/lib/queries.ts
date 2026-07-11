@@ -136,6 +136,7 @@ export function useDisconnectLinkedIn() {
       if (error) throw new Error(error.message);
     },
     onSuccess: () => {
+      queryClient.setQueryData(['linkedin_connection'], false);
       queryClient.invalidateQueries({ queryKey: ['linkedin_connection'] });
     },
   });

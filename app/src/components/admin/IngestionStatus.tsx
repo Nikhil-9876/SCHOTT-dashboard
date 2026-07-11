@@ -4,7 +4,7 @@ export default function IngestionStatus() {
   const { data: logs } = useIngestionLog();
   const { mutate: sync, isPending } = useTriggerIngestion();
   const { data: isConnected, isLoading: isConnectionLoading } = useLinkedInConnection();
-  const { mutate: disconnect } = useDisconnectLinkedIn();
+  const { mutate: disconnect, isPending: isDisconnecting, error: disconnectError } = useDisconnectLinkedIn();
 
   const lastLog = logs?.[0];
   const isFailed = lastLog?.status === 'failed';
@@ -56,9 +56,15 @@ export default function IngestionStatus() {
               cursor: 'pointer' 
             }}
             onClick={() => disconnect()}
+            disabled={isDisconnecting}
           >
-            Disconnect
+            {isDisconnecting ? 'Disconnecting...' : 'Disconnect'}
           </button>
+          {disconnectError && (
+            <span className="header-sync-info failed">
+              Disconnect failed
+            </span>
+          )}
         </>
       ) : (
         <button
