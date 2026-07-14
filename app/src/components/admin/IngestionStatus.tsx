@@ -7,8 +7,14 @@ export default function IngestionStatus() {
   const { mutate: disconnect, isPending: isDisconnecting, error: disconnectError } = useDisconnectLinkedIn();
 
   const lastLog = logs?.[0];
-  const isFailed = lastLog?.status === 'failed';
-  const syncErrorMessage = syncError?.message || (isFailed ? lastLog?.error_message : null);
+  const hasSyncError = !!syncError;
+  const isFailed = hasSyncError || lastLog?.status === 'failed';
+  const syncStatusText = syncError?.message
+    ?? (lastLog
+      ? lastLog.status === 'failed'
+        ? `Last sync failed${lastLog.error_message ? `: ${lastLog.error_message}` : ''}`
+        : `Last synced: ${formatDate(lastLog.finished_at ?? lastLog.started_at)}`
+      : 'Never synced');
 
   function formatDate(iso: string) {
     return new Date(iso).toLocaleString('en-IN', {
@@ -31,11 +37,7 @@ export default function IngestionStatus() {
       {isConnected ? (
         <>
           <span className={`header-sync-info${isFailed ? ' failed' : ''}`}>
-            {lastLog
-              ? isFailed
-                ? `Last sync failed${syncErrorMessage ? `: ${syncErrorMessage}` : ''}`
-                : `Last synced: ${formatDate(lastLog.finished_at ?? lastLog.started_at)}`
-              : 'Never synced'}
+            {syncStatusText}
           </span>
           <button
             className="btn btn-primary"

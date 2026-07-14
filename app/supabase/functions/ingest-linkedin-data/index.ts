@@ -63,6 +63,56 @@ function getAnalyticsLookbackDays() {
   return 365;
 }
 
+const MIN_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+function startOfUtcDay(date: Date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function addUtcDays(date: Date, days: number) {
+  const nextDate = new Date(date);
+  nextDate.setUTCDate(nextDate.getUTCDate() + days);
+  return nextDate;
+}
+
+function getLinkedInDateParts(date: Date) {
+  return {
+    day: date.getUTCDate(),
+    month: date.getUTCMonth() + 1,
+    year: date.getUTCFullYear(),
+  };
+}
+
+function buildDateRangeQuery(startDate: Date, endDate: Date) {
+  const start = getLinkedInDateParts(startDate);
+  const end = getLinkedInDateParts(endDate);
+
+  return `(start:(day:${start.day},month:${start.month},year:${start.year}),end:(day:${end.day},month:${end.month},year:${end.year}))`;
+}
+
+function getLastSyncTimestamp(log: { finished_at: string | null; started_at: string } | null) {
+  if (!log) return null;
+  return new Date(log.finished_at ?? log.started_at);
+}
+
+function getSyncDateRange(lastSuccessfulSyncAt: Date | null, now: Date, initialLookbackDays: number) {
+  const today = startOfUtcDay(now);
+
+  if (!lastSuccessfulSyncAt) {
+    return {
+      startDate: addUtcDays(today, -initialLookbackDays),
+      endDate: today,
+    };
+  }
+
+  // Keep a one-day overlap because LinkedIn reporting settles daily and prior-day
+  // metrics can change after the previous sync ran.
+  return {
+    startDate: startOfUtcDay(lastSuccessfulSyncAt),
+    endDate: today,
+  };
+}
+
 function buildCampaignsUrl(adAccountId: string, pageToken: string | null) {
   const campaignTypes = ['TEXT_AD', 'SPONSORED_UPDATES', 'SPONSORED_INMAILS', 'DYNAMIC'];
   const campaignStatuses = [
@@ -187,6 +237,10 @@ function getReach(stat: Record<string, unknown>) {
   return Number(stat.approximateMemberReach ?? stat.approximateUniqueImpressions ?? 0) || 0;
 }
 
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -206,6 +260,35 @@ serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
+
+    const now = new Date();
+
+    const { data: lastSuccessLog, error: lastSuccessError } = await supabaseClient
+      .from('ingestion_log')
+      .select('started_at, finished_at')
+      .eq('status', 'success')
+      .order('finished_at', { ascending: false, nullsFirst: false })
+      .order('started_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (lastSuccessError) throw new Error(`Failed to read sync log: ${lastSuccessError.message}`);
+
+    const lastSuccessfulSyncAt = getLastSyncTimestamp(lastSuccessLog);
+    if (lastSuccessfulSyncAt && now.getTime() - lastSuccessfulSyncAt.getTime() < MIN_SYNC_INTERVAL_MS) {
+      const nextSyncAt = new Date(lastSuccessfulSyncAt.getTime() + MIN_SYNC_INTERVAL_MS);
+      return new Response(JSON.stringify({
+        error: `Last sync should be 24 hours apart. Please try again after ${nextSyncAt.toISOString()}.`,
+        next_sync_at: nextSyncAt.toISOString(),
+      }), {
+        status: 429,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    const analyticsLookbackDays = getAnalyticsLookbackDays();
+    const { startDate, endDate } = getSyncDateRange(lastSuccessfulSyncAt, now, analyticsLookbackDays);
+    const dateRangeQuery = buildDateRangeQuery(startDate, endDate);
 
     // 2. Insert ingestion log (Running)
     const { data: logData, error: logError } = await supabaseClient
@@ -246,7 +329,6 @@ serve(async (req) => {
       // this dashboard must stay scoped to one known Campaign Manager account.
       const adAccountId = getRequiredAdAccountId();
       const campaignNameIncludes = getCampaignNameIncludes();
-      const analyticsLookbackDays = getAnalyticsLookbackDays();
 
       // 5. Fetch Campaigns for the Ad Account
       const campaigns: { id: string | number; name?: string; status?: string }[] = [];
@@ -271,11 +353,6 @@ serve(async (req) => {
         .from('campaigns')
         .delete()
         .or(`ad_account_id.is.null,ad_account_id.neq.${adAccountId}`);
-
-      await supabaseClient
-        .from('campaigns')
-        .delete()
-        .eq('ad_account_id', adAccountId);
 
       let campaignsUpdated = 0;
 
@@ -318,10 +395,6 @@ serve(async (req) => {
         if (upsertErr || !dbCampaign) continue;
 
         // 6. Fetch Daily Analytics metrics for this campaign.
-        const startDate = new Date();
-        startDate.setDate(startDate.getDate() - analyticsLookbackDays);
-        
-        const dateRangeQuery = `(start:(day:${startDate.getDate()},month:${startDate.getMonth() + 1},year:${startDate.getFullYear()}),end:(day:${new Date().getDate()},month:${new Date().getMonth() + 1},year:${new Date().getFullYear()}))`;
         const analyticsUrl = buildAnalyticsUrl(campaignUrn, dateRangeQuery);
 
         const analyticsRes = await fetch(analyticsUrl, { headers: apiHeaders });
@@ -403,19 +476,26 @@ serve(async (req) => {
         .update({ status: 'success', finished_at: new Date().toISOString(), campaigns_updated: campaignsUpdated })
         .eq('id', logId);
 
-      return new Response(JSON.stringify({ success: true, campaigns_updated: campaignsUpdated }), {
+      return new Response(JSON.stringify({
+        success: true,
+        campaigns_updated: campaignsUpdated,
+        synced_date_range: {
+          start: startDate.toISOString().slice(0, 10),
+          end: endDate.toISOString().slice(0, 10),
+        },
+      }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
 
-    } catch (innerError: any) {
+    } catch (innerError: unknown) {
       await supabaseClient
         .from('ingestion_log')
-        .update({ status: 'failed', finished_at: new Date().toISOString(), error_message: innerError.message })
+        .update({ status: 'failed', finished_at: new Date().toISOString(), error_message: getErrorMessage(innerError) })
         .eq('id', logId);
       throw innerError;
     }
-  } catch (error: any) {
-    return new Response(JSON.stringify({ error: error.message }), {
+  } catch (error: unknown) {
+    return new Response(JSON.stringify({ error: getErrorMessage(error) }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
