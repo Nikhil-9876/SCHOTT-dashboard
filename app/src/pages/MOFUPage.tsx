@@ -1,5 +1,5 @@
 import { useCampaignMetrics } from '../lib/queries';
-import { formatLakh, formatNumber, formatPercent } from '../lib/formatters';
+import { formatEUR, formatEURCompact, formatNumber, formatPercent } from '../lib/formatters';
 import MetricCard from '../components/ui/MetricCard';
 import SectionHeader from '../components/ui/SectionHeader';
 import ChartContainer from '../components/ui/ChartContainer';
@@ -68,7 +68,7 @@ export default function MOFUPage() {
   const completedAds = completed.reduce((a, c) => a + c.ad_count, 0);
   const activeAds    = active.reduce((a, c) => a + c.ad_count, 0);
 
-  const totalSpend  = sum(data, 'spend_inr');
+  const totalSpend  = sum(data, 'spend_eur');
   const totalClicks = sum(data, 'clicks');
   const totalLeads  = sum(data, 'leads');
   const avgEngRate  = wavg(data, 'engagement_rate', 'impressions');
@@ -95,15 +95,15 @@ export default function MOFUPage() {
 
       <SectionHeader>Key Metrics</SectionHeader>
       <div className="grid-4" style={{ marginBottom: '1rem' }}>
-        <MetricCard label="Spends"          value={formatLakh(totalSpend)} />
+        <MetricCard label="Spend"           value={formatEURCompact(totalSpend)} />
         <MetricCard label="Clicks"          value={formatNumber(totalClicks)} />
         <MetricCard label="Engagement Rate" value={formatPercent(avgEngRate)} />
         <MetricCard label="CTR"             value={formatPercent(avgCTR)} />
       </div>
       <div className="grid-3" style={{ marginBottom: '1.5rem' }}>
-        <MetricCard label="CPC"   value={`₹${avgCPC.toFixed(2)}`} />
+        <MetricCard label="CPC"   value={formatEUR(avgCPC)} />
         <MetricCard label="Leads" value={formatNumber(totalLeads)} />
-        <MetricCard label="CPL"   value={`₹${avgCPL.toFixed(2)}`} />
+        <MetricCard label="CPL"   value={formatEUR(avgCPL)} />
       </div>
 
       <SectionHeader>Campaign Details</SectionHeader>
@@ -112,27 +112,28 @@ export default function MOFUPage() {
           <thead>
             <tr>
               <th>Campaign Name</th><th>Status</th><th>Ads</th>
-              <th>Spends (₹)</th><th>Clicks</th><th>Eng. Rate %</th>
-              <th>CTR %</th><th>CPC (₹)</th><th>Leads</th><th>CPL (₹)</th>
+              <th>Spend (€)</th><th>Clicks</th><th>Eng. Rate %</th>
+              <th>CTR %</th><th>CPC (€)</th><th>Leads</th><th>CPL (€)</th>
             </tr>
           </thead>
           <tbody>
             {data.map(c => {
               const m = c.latest_metric;
-              const cpc = (m?.clicks && m?.spend_inr) ? (m.spend_inr / m.clicks).toFixed(2) : (m?.cpc_inr?.toFixed(2) ?? '—');
-              const cpl = (m?.leads  && m?.spend_inr) ? (m.spend_inr / m.leads).toFixed(2)  : (m?.cpl_inr?.toFixed(2) ?? '—');
+              const spend = m?.spend_eur ?? 0;
+              const cpc = m?.clicks ? spend / m.clicks : 0;
+              const cpl = m?.leads ? spend / m.leads : 0;
               return (
                 <tr key={c.id}>
                   <td>{c.name}</td>
                   <td><Badge status={c.status} /></td>
                   <td>{c.ad_count}</td>
-                  <td>{formatNumber(m?.spend_inr ?? 0)}</td>
+                  <td>{formatEUR(spend)}</td>
                   <td>{formatNumber(m?.clicks ?? 0)}</td>
                   <td>{formatPercent(m?.engagement_rate ?? 0)}</td>
                   <td>{formatPercent(m?.ctr ?? 0)}</td>
-                  <td>{cpc}</td>
+                  <td>{formatEUR(cpc)}</td>
                   <td>{m?.leads ?? 0}</td>
-                  <td>{cpl}</td>
+                  <td>{formatEUR(cpl)}</td>
                 </tr>
               );
             })}
@@ -155,11 +156,11 @@ export default function MOFUPage() {
             labels={data.map(c => c.name)}
             values={data.map(c => {
               const m = c.latest_metric;
-              return (m?.leads && m?.spend_inr) ? parseFloat((m.spend_inr / m.leads).toFixed(2)) : (m?.cpl_inr ?? 0);
+              return (m?.leads && m?.spend_eur) ? parseFloat((m.spend_eur / m.leads).toFixed(2)) : 0;
             })}
             colors={data.map((_, i) => i < data.length - 1 ? '#0050FF' : '#062E62')}
             height={280}
-            textFormat={v => `₹${v.toFixed(0)}`}
+            textFormat={v => formatEUR(v, 0)}
           />
         </ChartContainer>
       </div>

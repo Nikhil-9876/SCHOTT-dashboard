@@ -2,12 +2,13 @@ import { useIngestionLog, useTriggerIngestion, useLinkedInConnection, useDisconn
 
 export default function IngestionStatus() {
   const { data: logs } = useIngestionLog();
-  const { mutate: sync, isPending } = useTriggerIngestion();
+  const { mutate: sync, isPending, error: syncError } = useTriggerIngestion();
   const { data: isConnected, isLoading: isConnectionLoading } = useLinkedInConnection();
   const { mutate: disconnect, isPending: isDisconnecting, error: disconnectError } = useDisconnectLinkedIn();
 
   const lastLog = logs?.[0];
   const isFailed = lastLog?.status === 'failed';
+  const syncErrorMessage = syncError?.message || (isFailed ? lastLog?.error_message : null);
 
   function formatDate(iso: string) {
     return new Date(iso).toLocaleString('en-IN', {
@@ -32,7 +33,7 @@ export default function IngestionStatus() {
           <span className={`header-sync-info${isFailed ? ' failed' : ''}`}>
             {lastLog
               ? isFailed
-                ? `Last sync — Failed`
+                ? `Last sync failed${syncErrorMessage ? `: ${syncErrorMessage}` : ''}`
                 : `Last synced: ${formatDate(lastLog.finished_at ?? lastLog.started_at)}`
               : 'Never synced'}
           </span>
@@ -61,8 +62,8 @@ export default function IngestionStatus() {
             {isDisconnecting ? 'Disconnecting...' : 'Disconnect'}
           </button>
           {disconnectError && (
-            <span className="header-sync-info failed">
-              Disconnect failed
+            <span className="header-sync-info failed" title={disconnectError.message}>
+              {disconnectError.message}
             </span>
           )}
         </>

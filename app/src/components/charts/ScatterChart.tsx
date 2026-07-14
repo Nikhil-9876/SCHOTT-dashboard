@@ -1,4 +1,4 @@
-import Plot from 'react-plotly.js';
+import Plot from './Plot';
 import { CHART_CONFIG, CHART_LAYOUT_BASE } from './BarChart';
 
 interface ScatterPoint {

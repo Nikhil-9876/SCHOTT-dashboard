@@ -1,5 +1,5 @@
-import { useCampaignMetrics } from '../lib/queries';
-import { formatLakh, formatNumber, formatPercent } from '../lib/formatters';
+import { useAdPerformance, useCampaignMetrics } from '../lib/queries';
+import { formatEUR, formatEURCompact, formatNumber, formatPercent } from '../lib/formatters';
 import MetricCard from '../components/ui/MetricCard';
 import SectionHeader from '../components/ui/SectionHeader';
 import ChartContainer from '../components/ui/ChartContainer';
@@ -24,6 +24,7 @@ function wavg(campaigns: CampaignWithMetrics[], key: keyof NonNullable<CampaignW
 
 export default function TOFUPage() {
   const { data, isLoading, isError, refetch } = useCampaignMetrics('TOFU');
+  const { data: adPerformance = [] } = useAdPerformance('TOFU');
 
   if (isLoading) {
     return (
@@ -73,10 +74,13 @@ export default function TOFUPage() {
   const completedAds = completed.reduce((a, c) => a + c.ad_count, 0);
   const activeAds    = active.reduce((a, c) => a + c.ad_count, 0);
 
-  const totalSpend       = sum(data, 'spend_inr');
+  const totalAds         = data.reduce((a, c) => a + c.ad_count, 0);
+  const totalSpend       = sum(data, 'spend_eur');
   const totalReach       = sum(data, 'reach');
   const totalImpressions = sum(data, 'impressions');
-  const avgCPM           = sum(data, 'cpm_inr') / data.length;
+  const totalClicks      = sum(data, 'clicks');
+  const avgCPM           = totalImpressions ? (totalSpend / totalImpressions) * 1000 : 0;
+  const avgCPC           = totalClicks ? totalSpend / totalClicks : 0;
   const avgCTR           = wavg(data, 'ctr', 'impressions');
   const avgEngRate       = wavg(data, 'engagement_rate', 'impressions');
 
@@ -99,14 +103,17 @@ export default function TOFUPage() {
 
       <SectionHeader>Key Metrics</SectionHeader>
       <div className="grid-5" style={{ marginBottom: '1rem' }}>
-        <MetricCard label="Spends"      value={formatLakh(totalSpend)} />
+        <MetricCard label="Spend"       value={formatEURCompact(totalSpend)} />
         <MetricCard label="Reach"       value={formatNumber(totalReach)} />
         <MetricCard label="Impressions" value={formatNumber(totalImpressions)} />
-        <MetricCard label="CPM"         value={`₹${avgCPM.toFixed(2)}`} />
+        <MetricCard label="CPM"         value={formatEUR(avgCPM)} />
         <MetricCard label="CTR"         value={formatPercent(avgCTR)} />
       </div>
       <div className="grid-4" style={{ marginBottom: '1.5rem' }}>
         <MetricCard label="Engagement Rate" value={formatPercent(avgEngRate)} />
+        <MetricCard label="Ads"             value={formatNumber(totalAds)} />
+        <MetricCard label="Clicks"          value={formatNumber(totalClicks)} />
+        <MetricCard label="CPC"             value={formatEUR(avgCPC)} />
       </div>
 
       <SectionHeader>Campaign Details</SectionHeader>
@@ -115,23 +122,34 @@ export default function TOFUPage() {
           <thead>
             <tr>
               <th>Campaign Name</th><th>Status</th><th>Ads</th>
-              <th>Impressions</th><th>Reach</th><th>CPM (₹)</th>
-              <th>Eng. Rate %</th><th>CTR %</th>
+              <th>Spent</th><th>Impressions</th><th>Reach</th><th>Clicks</th>
+              <th>CTR</th><th>CPM</th><th>CPC</th><th>Leads</th>
             </tr>
           </thead>
           <tbody>
-            {data.map(c => (
-              <tr key={c.id}>
-                <td>{c.name}</td>
-                <td><Badge status={c.status} /></td>
-                <td>{c.ad_count}</td>
-                <td>{formatNumber(c.latest_metric?.impressions ?? 0)}</td>
-                <td>{formatNumber(c.latest_metric?.reach ?? 0)}</td>
-                <td>{(c.latest_metric?.cpm_inr ?? 0).toFixed(2)}</td>
-                <td>{formatPercent(c.latest_metric?.engagement_rate ?? 0)}</td>
-                <td>{formatPercent(c.latest_metric?.ctr ?? 0)}</td>
-              </tr>
-            ))}
+            {data.map(c => {
+              const m = c.latest_metric;
+              const spend = m?.spend_eur ?? 0;
+              const impressions = m?.impressions ?? 0;
+              const clicks = m?.clicks ?? 0;
+              const cpm = impressions ? (spend / impressions) * 1000 : 0;
+              const cpc = clicks ? spend / clicks : 0;
+              return (
+                <tr key={c.id}>
+                  <td>{c.name}</td>
+                  <td><Badge status={c.status} /></td>
+                  <td>{c.ad_count}</td>
+                  <td>{formatEUR(spend)}</td>
+                  <td>{formatNumber(impressions)}</td>
+                  <td>{formatNumber(m?.reach ?? 0)}</td>
+                  <td>{formatNumber(clicks)}</td>
+                  <td>{formatPercent(m?.ctr ?? 0)}</td>
+                  <td>{formatEUR(cpm)}</td>
+                  <td>{formatEUR(cpc)}</td>
+                  <td>{formatNumber(m?.leads ?? 0)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </ChartContainer>
@@ -156,6 +174,47 @@ export default function TOFUPage() {
           />
         </ChartContainer>
       </div>
+
+      <SectionHeader>Ad Performance</SectionHeader>
+      <ChartContainer>
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Ad Name</th>
+              <th>Status</th>
+              <th>Spend (€)</th>
+              <th>Impressions</th>
+              <th>Reach</th>
+              <th>Clicks</th>
+              <th>CTR</th>
+              <th>Engagements</th>
+              <th>Landing Page Clicks</th>
+            </tr>
+          </thead>
+          <tbody>
+            {adPerformance.map((row) => (
+              <tr key={`${row.campaign_id}-${row.creative_id}-${row.date}`}>
+                <td>{new Date(row.date).toLocaleDateString('en-GB')}</td>
+                <td>{row.creative_name}</td>
+                <td>{row.status ? <Badge status={row.status === 'ACTIVE' ? 'ACTIVE' : row.status === 'COMPLETED' ? 'COMPLETED' : 'PAUSED'} /> : '—'}</td>
+                <td>{formatEUR(row.spend_eur ?? 0)}</td>
+                <td>{formatNumber(row.impressions ?? 0)}</td>
+                <td>{formatNumber(row.reach ?? 0)}</td>
+                <td>{formatNumber(row.clicks ?? 0)}</td>
+                <td>{formatPercent(row.ctr ?? 0, 3)}</td>
+                <td>{formatNumber(row.engagements ?? 0)}</td>
+                <td>{formatNumber(row.landing_page_clicks ?? 0)}</td>
+              </tr>
+            ))}
+            {adPerformance.length === 0 && (
+              <tr>
+                <td colSpan={10}>No daily ad performance rows synced yet.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </ChartContainer>
 
       <Footer />
     </div>

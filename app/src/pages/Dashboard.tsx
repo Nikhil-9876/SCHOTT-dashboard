@@ -1,5 +1,5 @@
 import { useCampaignMetrics } from '../lib/queries';
-import { formatLakh, formatNumber } from '../lib/formatters';
+import { formatEURCompact, formatNumber, formatPercent } from '../lib/formatters';
 import SummaryCard from '../components/ui/SummaryCard';
 import FunnelCard from '../components/ui/FunnelCard';
 import SectionHeader from '../components/ui/SectionHeader';
@@ -65,9 +65,13 @@ export default function Dashboard() {
   const totalCampaigns = all.length;
   const activeCount = all.filter(c => c.status === 'ACTIVE').length;
   const completedCount = all.filter(c => c.status === 'COMPLETED').length;
-  const totalSpend = sumMetric(all, 'spend_inr');
+  const totalAds = all.reduce((acc, campaign) => acc + campaign.ad_count, 0);
   const totalSpendEur = sumMetric(all, 'spend_eur');
   const totalReach = sumMetric(all, 'reach');
+  const totalImpressions = sumMetric(all, 'impressions');
+  const totalClicks = sumMetric(all, 'clicks');
+  const totalLeads = sumMetric(all, 'leads');
+  const avgCTR = totalImpressions ? totalClicks / totalImpressions : 0;
 
   const tofuImpressions = sumMetric(all.filter(c => c.funnel_stage === 'TOFU'), 'impressions');
   const mofuImpressions = sumMetric(all.filter(c => c.funnel_stage === 'MOFU'), 'impressions');
@@ -85,14 +89,36 @@ export default function Dashboard() {
           detail={`${completedCount} Completed • ${activeCount} Active`}
         />
         <SummaryCard
-          label="Total Spends"
-          value={formatLakh(totalSpend)}
-          detail={`INR ${formatNumber(totalSpend)} • EUR ${formatNumber(Math.round(totalSpendEur))}`}
+          label="Total Spend"
+          value={formatEURCompact(totalSpendEur)}
+          detail="LinkedIn spend in EUR"
         />
         <SummaryCard
           label="Total Reach"
           value={formatNumber(totalReach)}
           detail="Total audience reached across campaigns"
+        />
+      </div>
+      <div className="grid-4" style={{ marginBottom: '1.5rem' }}>
+        <SummaryCard
+          label="Ads"
+          value={totalAds}
+          detail="Creatives linked to synced campaigns"
+        />
+        <SummaryCard
+          label="Impressions"
+          value={formatNumber(totalImpressions)}
+          detail="Delivered impressions"
+        />
+        <SummaryCard
+          label="Clicks"
+          value={formatNumber(totalClicks)}
+          detail={`CTR ${formatPercent(avgCTR)}`}
+        />
+        <SummaryCard
+          label="Leads"
+          value={formatNumber(totalLeads)}
+          detail="Website conversions reported by LinkedIn"
         />
       </div>
 

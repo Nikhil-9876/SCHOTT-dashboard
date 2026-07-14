@@ -4,6 +4,7 @@ export type IngestionStatus = 'running' | 'success' | 'failed';
 
 export interface Campaign {
   id: string;
+  ad_account_id: string | null;
   linkedin_id: string;
   name: string;
   funnel_stage: FunnelStage;
@@ -39,6 +40,24 @@ export interface IngestionLog {
   status: IngestionStatus;
   campaigns_updated: number | null;
   error_message: string | null;
+}
+
+export interface AdPerformanceMetric {
+  id: string;
+  campaign_id: string;
+  creative_id: string;
+  creative_name: string;
+  status: string | null;
+  date: string;
+  spend_eur: number | null;
+  impressions: number | null;
+  reach: number | null;
+  clicks: number | null;
+  ctr: number | null;
+  engagements: number | null;
+  landing_page_clicks: number | null;
+  ingested_at: string;
+  campaign?: Pick<Campaign, 'id' | 'name' | 'funnel_stage'>;
 }
 
 /** Joined type returned from Supabase query */

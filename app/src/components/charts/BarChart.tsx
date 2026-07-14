@@ -1,4 +1,4 @@
-import Plot from 'react-plotly.js';
+import Plot from './Plot';
 
 // ── Shared Plotly config from dashboard.html script block ──
 export const CHART_CONFIG: Partial<Plotly.Config> = {

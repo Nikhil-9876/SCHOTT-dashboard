@@ -1,6 +1,7 @@
-// ── Number formatters using en-IN locale (Indian numbering system) ──
+// ── Number and currency formatters ──
 
 const inLocale = 'en-IN';
+const euroLocale = 'en-IE';
 
 /** Format as Indian Rupees: ₹X,XX,XXX */
 export function formatINR(value: number): string {
@@ -43,4 +44,21 @@ export function formatINRShort(value: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(value)}`;
+}
+
+/** Format as Euro: €1,234.56 */
+export function formatEUR(value: number, decimals = 2): string {
+  return new Intl.NumberFormat(euroLocale, {
+    style: 'currency',
+    currency: 'EUR',
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  }).format(value);
+}
+
+/** Compact Euro for cards while keeping FIOLAX cost reporting in EUR. */
+export function formatEURCompact(value: number): string {
+  if (value >= 1000000) return `€${(value / 1000000).toFixed(1)}M`;
+  if (value >= 1000) return `€${(value / 1000).toFixed(1)}K`;
+  return formatEUR(value);
 }

@@ -4,7 +4,7 @@
 CREATE OR REPLACE FUNCTION disconnect_linkedin()
 RETURNS void AS $$
 BEGIN
-  DELETE FROM linkedin_tokens;
+  DELETE FROM linkedin_tokens WHERE true;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 

@@ -6,6 +6,187 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-functions-secret',
 };
 
+const DEFAULT_LINKEDIN_API_VERSION = '202606';
+
+function getLinkedInApiVersion() {
+  const configuredVersion = Deno.env.get('LINKEDIN_API_VERSION')?.trim();
+  if (configuredVersion && /^\d{6}$/.test(configuredVersion)) {
+    return configuredVersion;
+  }
+
+  return DEFAULT_LINKEDIN_API_VERSION;
+}
+
+function normalizeAdAccountId(accountId: string | number) {
+  return String(accountId).replace(/^urn:li:sponsoredAccount:/, '');
+}
+
+function toLinkedInUrn(value: string | number, entity: string) {
+  const id = String(value);
+  return id.startsWith('urn:li:') ? id : `urn:li:${entity}:${id}`;
+}
+
+function getRequiredAdAccountId() {
+  const configuredAdAccountId = Deno.env.get('LINKEDIN_AD_ACCOUNT_ID')?.trim();
+  if (!configuredAdAccountId) {
+    throw new Error('LINKEDIN_AD_ACCOUNT_ID is not configured. Set this Supabase secret to the specific Campaign Manager ad account id before syncing.');
+  }
+
+  return normalizeAdAccountId(configuredAdAccountId);
+}
+
+function getCampaignNameIncludes() {
+  const configuredFilter = Deno.env.get('LINKEDIN_CAMPAIGN_NAME_INCLUDES')?.trim();
+  if (!configuredFilter) {
+    return [];
+  }
+
+  return configuredFilter
+    .split(',')
+    .map((term) => term.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function campaignMatchesNameFilter(campaignName: string, includeTerms: string[]) {
+  if (includeTerms.length === 0) return true;
+
+  const normalizedName = campaignName.toLowerCase();
+  return includeTerms.some((term) => normalizedName.includes(term));
+}
+
+function getAnalyticsLookbackDays() {
+  const configuredDays = Number(Deno.env.get('LINKEDIN_ANALYTICS_LOOKBACK_DAYS'));
+  if (Number.isFinite(configuredDays) && configuredDays > 0) {
+    return Math.floor(configuredDays);
+  }
+
+  return 365;
+}
+
+function buildCampaignsUrl(adAccountId: string, pageToken: string | null) {
+  const campaignTypes = ['TEXT_AD', 'SPONSORED_UPDATES', 'SPONSORED_INMAILS', 'DYNAMIC'];
+  const campaignStatuses = [
+    'ACTIVE',
+    'PAUSED',
+    'ARCHIVED',
+    'COMPLETED',
+    'CANCELED',
+    'DRAFT',
+    'PENDING_DELETION',
+    'REMOVED',
+  ];
+  const search = `(type:(values:List(${campaignTypes.join(',')})),status:(values:List(${campaignStatuses.join(',')})))`;
+  const params = [
+    'q=search',
+    `search=${search}`,
+    'sortOrder=DESCENDING',
+    'pageSize=100',
+  ];
+
+  if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
+
+  return `https://api.linkedin.com/rest/adAccounts/${adAccountId}/adCampaigns?${params.join('&')}`;
+}
+
+function buildCreativesUrl(adAccountId: string, campaignUrn: string, pageToken: string | null) {
+  const params = [
+    'q=criteria',
+    `campaigns=List(${encodeURIComponent(campaignUrn)})`,
+    'pageSize=100',
+  ];
+
+  if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
+
+  return `https://api.linkedin.com/rest/adAccounts/${adAccountId}/creatives?${params.join('&')}`;
+}
+
+function getCreativeName(rawCreative: Record<string, unknown>, creativeId: string) {
+  const content = rawCreative.content as Record<string, unknown> | undefined;
+  return String(
+    rawCreative.name
+    ?? rawCreative.reference
+    ?? content?.reference
+    ?? `Ad_${creativeId}`
+  );
+}
+
+async function fetchCreatives(adAccountId: string, campaignUrn: string, headers: Record<string, string>) {
+  const creatives: { id: string; name: string; status: string | null }[] = [];
+  let pageToken: string | null = null;
+
+  do {
+    const creativesRes = await fetch(buildCreativesUrl(adAccountId, campaignUrn, pageToken), { headers });
+    if (!creativesRes.ok) {
+      console.warn(`Failed to fetch creatives for ${campaignUrn}: ${await creativesRes.text()}`);
+      return creatives;
+    }
+
+    const creativesData = await creativesRes.json();
+    for (const rawCreative of (creativesData.elements || [])) {
+      const creativeId = String(rawCreative.id);
+      creatives.push({
+        id: creativeId,
+        name: getCreativeName(rawCreative, creativeId),
+        status: rawCreative.status ? String(rawCreative.status) : null,
+      });
+    }
+    pageToken = creativesData.metadata?.nextPageToken ?? null;
+  } while (pageToken);
+
+  return creatives;
+}
+
+function buildAnalyticsUrl(campaignUrn: string, dateRangeQuery: string) {
+  const fields = [
+    'dateRange',
+    'pivotValues',
+    'impressions',
+    'approximateMemberReach',
+    'approximateUniqueImpressions',
+    'clicks',
+    'costInLocalCurrency',
+    'externalWebsiteConversions',
+  ];
+  const params = [
+    'q=analytics',
+    'pivot=CAMPAIGN',
+    `dateRange=${dateRangeQuery}`,
+    'timeGranularity=DAILY',
+    `campaigns=List(${encodeURIComponent(campaignUrn)})`,
+    `fields=${fields.join(',')}`,
+  ];
+
+  return `https://api.linkedin.com/rest/adAnalytics?${params.join('&')}`;
+}
+
+function buildCreativeAnalyticsUrl(creativeUrn: string, dateRangeQuery: string) {
+  const fields = [
+    'dateRange',
+    'pivotValues',
+    'impressions',
+    'approximateMemberReach',
+    'approximateUniqueImpressions',
+    'clicks',
+    'costInLocalCurrency',
+    'totalEngagements',
+    'landingPageClicks',
+  ];
+  const params = [
+    'q=analytics',
+    'pivot=CREATIVE',
+    `dateRange=${dateRangeQuery}`,
+    'timeGranularity=DAILY',
+    `creatives=List(${encodeURIComponent(creativeUrn)})`,
+    `fields=${fields.join(',')}`,
+  ];
+
+  return `https://api.linkedin.com/rest/adAnalytics?${params.join('&')}`;
+}
+
+function getReach(stat: Record<string, unknown>) {
+  return Number(stat.approximateMemberReach ?? stat.approximateUniqueImpressions ?? 0) || 0;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -53,7 +234,7 @@ serve(async (req) => {
         throw new Error('LinkedIn access token is expired. Please reconnect.');
       }
 
-      const version = Deno.env.get('LINKEDIN_API_VERSION') || '202404';
+      const version = getLinkedInApiVersion();
       const apiHeaders = {
         'Authorization': `Bearer ${access_token}`,
         'LinkedIn-Version': version,
@@ -61,37 +242,50 @@ serve(async (req) => {
         'Content-Type': 'application/json',
       };
 
-      // 4. Resolve Ad Account(s)
-      let adAccountId = Deno.env.get('LINKEDIN_AD_ACCOUNT_ID');
-      if (!adAccountId) {
-        // Auto-discover the first accessible Ad Account
-        const accountsRes = await fetch('https://api.linkedin.com/rest/adAccounts?q=search', { headers: apiHeaders });
-        if (!accountsRes.ok) throw new Error(`Failed to fetch Ad Accounts: ${await accountsRes.text()}`);
-        const accountsData = await accountsRes.json();
-        if (!accountsData.elements || accountsData.elements.length === 0) {
-          await supabaseClient
-            .from('ingestion_log')
-            .update({ status: 'success', finished_at: new Date().toISOString(), campaigns_updated: 0 })
-            .eq('id', logId);
-
-          return new Response(JSON.stringify({ success: true, campaigns_updated: 0 }), {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          });
-        }
-        adAccountId = accountsData.elements[0].id;
-      }
-
-      const accountUrn = `urn:li:sponsoredAccount:${adAccountId}`;
+      // 4. Resolve the configured Ad Account. Do not auto-discover here:
+      // this dashboard must stay scoped to one known Campaign Manager account.
+      const adAccountId = getRequiredAdAccountId();
+      const campaignNameIncludes = getCampaignNameIncludes();
+      const analyticsLookbackDays = getAnalyticsLookbackDays();
 
       // 5. Fetch Campaigns for the Ad Account
-      const campaignsUrl = `https://api.linkedin.com/rest/adCampaigns?q=search&search=(account:(values:List(${accountUrn})))`;
-      const campaignsRes = await fetch(campaignsUrl, { headers: apiHeaders });
-      if (!campaignsRes.ok) throw new Error(`Failed to fetch campaigns: ${await campaignsRes.text()}`);
-      const campaignsData = await campaignsRes.json();
+      const campaigns: { id: string | number; name?: string; status?: string }[] = [];
+      let pageToken: string | null = null;
+
+      do {
+        const campaignsRes = await fetch(buildCampaignsUrl(adAccountId, pageToken), { headers: apiHeaders });
+        if (!campaignsRes.ok) throw new Error(`Failed to fetch campaigns: ${await campaignsRes.text()}`);
+        const campaignsData = await campaignsRes.json();
+
+        campaigns.push(...(campaignsData.elements || []));
+        pageToken = campaignsData.metadata?.nextPageToken ?? null;
+      } while (pageToken);
+
+      const filteredCampaigns = campaigns.filter((rawCamp) => {
+        const campaignId = String(rawCamp.id);
+        const campaignName = String(rawCamp.name ?? `LinkedIn campaign ${campaignId}`);
+        return campaignMatchesNameFilter(campaignName, campaignNameIncludes);
+      });
+
+      await supabaseClient
+        .from('campaigns')
+        .delete()
+        .or(`ad_account_id.is.null,ad_account_id.neq.${adAccountId}`);
+
+      await supabaseClient
+        .from('campaigns')
+        .delete()
+        .eq('ad_account_id', adAccountId);
 
       let campaignsUpdated = 0;
 
-      for (const rawCamp of (campaignsData.elements || [])) {
+      for (const rawCamp of filteredCampaigns) {
+        const campaignId = String(rawCamp.id);
+        const campaignName = String(rawCamp.name ?? `LinkedIn campaign ${campaignId}`);
+        const campaignUrn = toLinkedInUrn(campaignId, 'sponsoredCampaign');
+        const creatives = await fetchCreatives(adAccountId, campaignUrn, apiHeaders);
+        const adCount = creatives.length;
+
         // Map LinkedIn statuses to DB constraint: 'ACTIVE' | 'COMPLETED' | 'PAUSED'
         let mappedStatus: 'ACTIVE' | 'COMPLETED' | 'PAUSED' = 'PAUSED';
         if (rawCamp.status === 'ACTIVE') mappedStatus = 'ACTIVE';
@@ -99,7 +293,7 @@ serve(async (req) => {
 
         // Categorize campaigns into funnel stages (TOFU / MOFU / BOFU) using custom rules
         let funnelStage: 'TOFU' | 'MOFU' | 'BOFU' = 'TOFU';
-        const nameLower = rawCamp.name.toLowerCase();
+        const nameLower = campaignName.toLowerCase();
         if (nameLower.includes('mofu') || nameLower.includes('consideration') || nameLower.includes('traffic')) {
           funnelStage = 'MOFU';
         } else if (nameLower.includes('bofu') || nameLower.includes('conversion') || nameLower.includes('lead')) {
@@ -110,10 +304,12 @@ serve(async (req) => {
         const { data: dbCampaign, error: upsertErr } = await supabaseClient
           .from('campaigns')
           .upsert({
-            linkedin_id: rawCamp.id,
-            name: rawCamp.name,
+            ad_account_id: adAccountId,
+            linkedin_id: campaignId,
+            name: campaignName,
             status: mappedStatus,
             funnel_stage: funnelStage,
+            ad_count: adCount,
             updated_at: new Date().toISOString(),
           }, { onConflict: 'linkedin_id' })
           .select('id')
@@ -121,13 +317,12 @@ serve(async (req) => {
 
         if (upsertErr || !dbCampaign) continue;
 
-        // 6. Fetch Daily Analytics metrics for this campaign (last 30 days)
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        // 6. Fetch Daily Analytics metrics for this campaign.
+        const startDate = new Date();
+        startDate.setDate(startDate.getDate() - analyticsLookbackDays);
         
-        const dateRangeQuery = `(start:(day:${thirtyDaysAgo.getDate()},month:${thirtyDaysAgo.getMonth() + 1},year:${thirtyDaysAgo.getFullYear()}),end:(day:${new Date().getDate()},month:${new Date().getMonth() + 1},year:${new Date().getFullYear()}))`;
-        const campaignUrn = rawCamp.id.startsWith('urn:li:') ? rawCamp.id : `urn:li:sponsoredCampaign:${rawCamp.id}`;
-        const analyticsUrl = `https://api.linkedin.com/rest/adAnalytics?q=analytics&pivot=CAMPAIGN&dateRange=${dateRangeQuery}&timeGranularity=DAILY&campaigns=List(${campaignUrn})`;
+        const dateRangeQuery = `(start:(day:${startDate.getDate()},month:${startDate.getMonth() + 1},year:${startDate.getFullYear()}),end:(day:${new Date().getDate()},month:${new Date().getMonth() + 1},year:${new Date().getFullYear()}))`;
+        const analyticsUrl = buildAnalyticsUrl(campaignUrn, dateRangeQuery);
 
         const analyticsRes = await fetch(analyticsUrl, { headers: apiHeaders });
         if (analyticsRes.ok) {
@@ -138,9 +333,13 @@ serve(async (req) => {
             const dateEnd = `${stat.dateRange.end.year}-${String(stat.dateRange.end.month).padStart(2, '0')}-${String(stat.dateRange.end.day).padStart(2, '0')}`;
             
             const impressions = stat.impressions || 0;
+            const reach = getReach(stat);
             const clicks = stat.clicks || 0;
             const spend = Number(stat.costInLocalCurrency) || 0;
-            const leads = stat.conversions || 0;
+            const leads = stat.externalWebsiteConversions || 0;
+            const cpm = impressions > 0 ? ((spend / impressions) * 1000) : 0;
+            const cpc = clicks > 0 ? (spend / clicks) : 0;
+            const cpl = leads > 0 ? (spend / leads) : 0;
 
             await supabaseClient
               .from('campaign_metrics')
@@ -149,13 +348,50 @@ serve(async (req) => {
                 date_range_start: dateStart,
                 date_range_end: dateEnd,
                 impressions,
+                reach,
                 clicks,
                 spend_inr: spend,
-                spend_eur: spend * 0.011, // Standard approximate Conversion Rate
+                spend_eur: spend,
+                engagement_rate: impressions > 0 ? (clicks / impressions) : 0,
                 ctr: impressions > 0 ? (clicks / impressions) : 0,
-                cpc_inr: clicks > 0 ? (spend / clicks) : 0,
+                cpm_inr: cpm,
+                cpc_inr: cpc,
+                cpl_inr: cpl,
                 leads,
               }, { onConflict: 'campaign_id,date_range_start,date_range_end' });
+          }
+        }
+
+        for (const creative of creatives) {
+          const creativeUrn = toLinkedInUrn(creative.id, 'sponsoredCreative');
+          const creativeAnalyticsRes = await fetch(buildCreativeAnalyticsUrl(creativeUrn, dateRangeQuery), { headers: apiHeaders });
+          if (!creativeAnalyticsRes.ok) {
+            console.warn(`Failed to fetch ad analytics for ${creativeUrn}: ${await creativeAnalyticsRes.text()}`);
+            continue;
+          }
+
+          const creativeAnalyticsData = await creativeAnalyticsRes.json();
+          for (const stat of (creativeAnalyticsData.elements || [])) {
+            const date = `${stat.dateRange.start.year}-${String(stat.dateRange.start.month).padStart(2, '0')}-${String(stat.dateRange.start.day).padStart(2, '0')}`;
+            const impressions = stat.impressions || 0;
+            const clicks = stat.clicks || 0;
+
+            await supabaseClient
+              .from('ad_performance_metrics')
+              .upsert({
+                campaign_id: dbCampaign.id,
+                creative_id: creative.id,
+                creative_name: creative.name,
+                status: creative.status,
+                date,
+                spend_eur: Number(stat.costInLocalCurrency) || 0,
+                impressions,
+                reach: getReach(stat),
+                clicks,
+                ctr: impressions > 0 ? (clicks / impressions) : 0,
+                engagements: stat.totalEngagements || clicks,
+                landing_page_clicks: stat.landingPageClicks || 0,
+              }, { onConflict: 'campaign_id,creative_id,date' });
           }
         }
         campaignsUpdated++;
