@@ -158,6 +158,7 @@ async function triggerIngestion(): Promise<void> {
   const secret = import.meta.env.VITE_FUNCTIONS_SECRET as string;
   const { error } = await supabase.functions.invoke('ingest-linkedin-data', {
     headers: { 'x-functions-secret': secret ?? '' },
+    body: { trigger: 'manual' },
   });
   if (error) throw new Error(await getFunctionErrorMessage(error));
 }

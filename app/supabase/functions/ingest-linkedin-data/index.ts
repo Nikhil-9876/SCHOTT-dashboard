@@ -65,6 +65,15 @@ function getAnalyticsLookbackDays() {
 
 const MIN_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
+async function getIngestionTrigger(req: Request) {
+  try {
+    const payload = await req.clone().json();
+    return payload?.trigger === 'manual' ? 'manual' : 'scheduled';
+  } catch {
+    return 'scheduled';
+  }
+}
+
 function startOfUtcDay(date: Date) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
@@ -262,6 +271,8 @@ serve(async (req) => {
     }
 
     const now = new Date();
+    const ingestionTrigger = await getIngestionTrigger(req);
+    const isManualSync = ingestionTrigger === 'manual';
 
     const { data: lastSuccessLog, error: lastSuccessError } = await supabaseClient
       .from('ingestion_log')
@@ -275,7 +286,7 @@ serve(async (req) => {
     if (lastSuccessError) throw new Error(`Failed to read sync log: ${lastSuccessError.message}`);
 
     const lastSuccessfulSyncAt = getLastSyncTimestamp(lastSuccessLog);
-    if (lastSuccessfulSyncAt && now.getTime() - lastSuccessfulSyncAt.getTime() < MIN_SYNC_INTERVAL_MS) {
+    if (!isManualSync && lastSuccessfulSyncAt && now.getTime() - lastSuccessfulSyncAt.getTime() < MIN_SYNC_INTERVAL_MS) {
       const nextSyncAt = new Date(lastSuccessfulSyncAt.getTime() + MIN_SYNC_INTERVAL_MS);
       return new Response(JSON.stringify({
         error: `Last sync should be 24 hours apart. Please try again after ${nextSyncAt.toISOString()}.`,
@@ -478,6 +489,7 @@ serve(async (req) => {
 
       return new Response(JSON.stringify({
         success: true,
+        trigger: ingestionTrigger,
         campaigns_updated: campaignsUpdated,
         synced_date_range: {
           start: startDate.toISOString().slice(0, 10),
