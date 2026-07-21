@@ -56,6 +56,9 @@ export interface AdPerformanceMetric {
   ctr: number | null;
   engagements: number | null;
   landing_page_clicks: number | null;
+  reference: string | null;
+  creative_url: string | null;
+  thumbnail_url: string | null;
   ingested_at: string;
   campaign?: Pick<Campaign, 'id' | 'name' | 'funnel_stage'>;
 }

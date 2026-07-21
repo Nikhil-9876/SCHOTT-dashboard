@@ -170,7 +170,7 @@ function getCreativeName(rawCreative: Record<string, unknown>, creativeId: strin
 }
 
 async function fetchCreatives(adAccountId: string, campaignUrn: string, headers: Record<string, string>) {
-  const creatives: { id: string; name: string; status: string | null }[] = [];
+  const creatives: { id: string; name: string; status: string | null; reference: string | null; creative_url: string | null }[] = [];
   let pageToken: string | null = null;
 
   do {
@@ -183,10 +183,24 @@ async function fetchCreatives(adAccountId: string, campaignUrn: string, headers:
     const creativesData = await creativesRes.json();
     for (const rawCreative of (creativesData.elements || [])) {
       const creativeId = String(rawCreative.id);
+      // LinkedIn REST API often omits 'status' on creative objects;
+      // check both 'status' and 'intendedStatus' (used in newer API versions).
+      const rawStatus = rawCreative.status ?? rawCreative.intendedStatus ?? null;
+
+      const content = rawCreative.content as Record<string, unknown> | undefined;
+      const reference = String(rawCreative.reference ?? content?.reference ?? '');
+
+      let creativeUrl: string | null = null;
+      if (reference && reference.startsWith('urn:li:')) {
+        creativeUrl = `https://www.linkedin.com/feed/update/${reference}`;
+      }
+
       creatives.push({
         id: creativeId,
         name: getCreativeName(rawCreative, creativeId),
-        status: rawCreative.status ? String(rawCreative.status) : null,
+        status: rawStatus ? String(rawStatus) : null,
+        reference: reference || null,
+        creative_url: creativeUrl,
       });
     }
     pageToken = creativesData.metadata?.nextPageToken ?? null;
@@ -195,17 +209,110 @@ async function fetchCreatives(adAccountId: string, campaignUrn: string, headers:
   return creatives;
 }
 
-function buildAnalyticsUrl(campaignUrn: string, dateRangeQuery: string) {
-  const fields = [
-    'dateRange',
-    'pivotValues',
-    'impressions',
-    'approximateMemberReach',
-    'approximateUniqueImpressions',
-    'clicks',
-    'costInLocalCurrency',
-    'externalWebsiteConversions',
-  ];
+// ── Fetch and permanently store ad creative thumbnail ────────────────────────
+// Strategy: scrape the LinkedIn public post page (server-side, no CORS) and
+// extract the og:image URL. LinkedIn embeds a stable, long-lived CDN URL in
+// the Open Graph meta tags (e=2147483647 = effectively permanent). We then
+// download the image bytes and re-host them in Supabase Storage for a fully
+// stable, auth-free thumbnail URL that the dashboard can use forever.
+async function fetchCreativeThumbnail(
+  reference: string,
+  creativeId: string,
+  supabaseClient: ReturnType<typeof createClient>,
+): Promise<string | null> {
+  try {
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const numericId = creativeId.replace(/^urn:li:\w+:/, '');
+    const fileName = `${numericId}.jpg`;
+
+    // Step 1: Fetch the public LinkedIn post page and extract og:image
+    const postUrl = `https://www.linkedin.com/feed/update/${encodeURIComponent(reference)}`;
+    const pageRes = await fetch(postUrl, {
+      headers: {
+        // Use a crawler UA so LinkedIn renders the full OG meta tags
+        'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+      },
+    });
+    if (!pageRes.ok) {
+      console.warn(`[thumbnail] Failed to fetch post page for ${reference}: ${pageRes.status}`);
+      return null;
+    }
+    const html = await pageRes.text();
+
+    // Extract og:image content attribute (handles both attribute orders)
+    const ogImageMatch =
+      html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ??
+      html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+    const ogImageUrl = ogImageMatch?.[1]?.replace(/&amp;/g, '&') ?? null;
+
+    if (!ogImageUrl) {
+      console.warn(`[thumbnail] No og:image found in post page for ${reference}`);
+      return null;
+    }
+
+    // Step 2: Download image bytes from the CDN URL
+    const imgRes = await fetch(ogImageUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' },
+    });
+    if (!imgRes.ok) {
+      console.warn(`[thumbnail] Failed to download og:image for ${creativeId}: ${imgRes.status}`);
+      return null;
+    }
+    const bytes = await imgRes.arrayBuffer();
+    const contentType = imgRes.headers.get('content-type') ?? 'image/jpeg';
+    const ext = contentType.includes('png') ? 'png' : 'jpg';
+    const finalFileName = `${numericId}.${ext}`;
+
+    // Step 3: Upload to Supabase Storage (upsert = idempotent on re-sync)
+    const { error: uploadError } = await supabaseClient.storage
+      .from('ad-thumbnails')
+      .upload(finalFileName, bytes, { contentType, upsert: true });
+
+    if (uploadError) {
+      console.warn(`[thumbnail] Storage upload failed for ${creativeId}: ${uploadError.message}`);
+      return null;
+    }
+
+    // Step 4: Return stable public URL
+    const publicUrl = `${supabaseUrl}/storage/v1/object/public/ad-thumbnails/${finalFileName}`;
+    console.log(`[thumbnail] ✓ Stored thumbnail for ${creativeId} → ${publicUrl}`);
+    return publicUrl;
+  } catch (err) {
+    console.warn(`[thumbnail] Unexpected error for ${creativeId}:`, err);
+    return null;
+  }
+}
+
+const BASE_CAMPAIGN_ANALYTICS_FIELDS = [
+  'dateRange',
+  'pivotValues',
+  'impressions',
+  'approximateMemberReach',
+  'clicks',
+  'costInLocalCurrency',
+  'externalWebsiteConversions',
+];
+
+const LEAD_FORM_ANALYTICS_FIELDS = [
+  'oneClickLeads',
+  'viralOneClickLeads',
+  'leadGenerationMailContactInfoShares',
+];
+
+const CREATIVE_ANALYTICS_FIELDS = [
+  'dateRange',
+  'pivotValues',
+  'impressions',
+  'approximateMemberReach',
+  'clicks',
+  'costInLocalCurrency',
+  'totalEngagements',
+  'landingPageClicks',
+];
+
+function buildAnalyticsUrl(campaignUrn: string, dateRangeQuery: string, fields: string[]) {
   const params = [
     'q=analytics',
     'pivot=CAMPAIGN',
@@ -219,31 +326,52 @@ function buildAnalyticsUrl(campaignUrn: string, dateRangeQuery: string) {
 }
 
 function buildCreativeAnalyticsUrl(creativeUrn: string, dateRangeQuery: string) {
-  const fields = [
-    'dateRange',
-    'pivotValues',
-    'impressions',
-    'approximateMemberReach',
-    'approximateUniqueImpressions',
-    'clicks',
-    'costInLocalCurrency',
-    'totalEngagements',
-    'landingPageClicks',
-  ];
   const params = [
     'q=analytics',
     'pivot=CREATIVE',
     `dateRange=${dateRangeQuery}`,
     'timeGranularity=DAILY',
     `creatives=List(${encodeURIComponent(creativeUrn)})`,
-    `fields=${fields.join(',')}`,
+    `fields=${CREATIVE_ANALYTICS_FIELDS.join(',')}`,
   ];
 
   return `https://api.linkedin.com/rest/adAnalytics?${params.join('&')}`;
 }
 
+async function fetchCampaignAnalytics(campaignUrn: string, dateRangeQuery: string, headers: Record<string, string>) {
+  const extendedFields = [...BASE_CAMPAIGN_ANALYTICS_FIELDS, ...LEAD_FORM_ANALYTICS_FIELDS];
+  const extendedResponse = await fetch(buildAnalyticsUrl(campaignUrn, dateRangeQuery, extendedFields), { headers });
+  if (extendedResponse.ok) {
+    return extendedResponse;
+  }
+
+  const extendedError = await extendedResponse.text();
+  console.warn(`Failed to fetch extended campaign analytics for ${campaignUrn}: ${extendedError}`);
+
+  const baseResponse = await fetch(buildAnalyticsUrl(campaignUrn, dateRangeQuery, BASE_CAMPAIGN_ANALYTICS_FIELDS), { headers });
+  if (!baseResponse.ok) {
+    console.warn(`Failed to fetch campaign analytics for ${campaignUrn}: ${await baseResponse.text()}`);
+  }
+
+  return baseResponse;
+}
+
+function getNumberMetric(stat: Record<string, unknown>, key: string) {
+  return Number(stat[key] ?? 0) || 0;
+}
+
 function getReach(stat: Record<string, unknown>) {
-  return Number(stat.approximateMemberReach ?? stat.approximateUniqueImpressions ?? 0) || 0;
+  return getNumberMetric(stat, 'approximateMemberReach');
+}
+
+function getLeadCount(stat: Record<string, unknown>) {
+  const websiteConversions = getNumberMetric(stat, 'externalWebsiteConversions');
+  const leadFormSubmissions = LEAD_FORM_ANALYTICS_FIELDS.reduce(
+    (total, field) => total + getNumberMetric(stat, field),
+    0
+  );
+
+  return websiteConversions + leadFormSubmissions;
 }
 
 function getErrorMessage(error: unknown) {
@@ -367,6 +495,15 @@ serve(async (req) => {
 
       let campaignsUpdated = 0;
 
+      // Pre-load all existing thumbnail_urls to avoid re-downloading on every sync
+      const { data: existingThumbRows } = await supabaseClient
+        .from('ad_performance_metrics')
+        .select('creative_id, thumbnail_url')
+        .not('thumbnail_url', 'is', null);
+      const thumbCache = new Map<string, string>(
+        (existingThumbRows ?? []).map((r: { creative_id: string; thumbnail_url: string }) => [r.creative_id, r.thumbnail_url])
+      );
+
       for (const rawCamp of filteredCampaigns) {
         const campaignId = String(rawCamp.id);
         const campaignName = String(rawCamp.name ?? `LinkedIn campaign ${campaignId}`);
@@ -406,9 +543,7 @@ serve(async (req) => {
         if (upsertErr || !dbCampaign) continue;
 
         // 6. Fetch Daily Analytics metrics for this campaign.
-        const analyticsUrl = buildAnalyticsUrl(campaignUrn, dateRangeQuery);
-
-        const analyticsRes = await fetch(analyticsUrl, { headers: apiHeaders });
+        const analyticsRes = await fetchCampaignAnalytics(campaignUrn, dateRangeQuery, apiHeaders);
         if (analyticsRes.ok) {
           const analyticsData = await analyticsRes.json();
           
@@ -420,7 +555,7 @@ serve(async (req) => {
             const reach = getReach(stat);
             const clicks = stat.clicks || 0;
             const spend = Number(stat.costInLocalCurrency) || 0;
-            const leads = stat.externalWebsiteConversions || 0;
+            const leads = getLeadCount(stat);
             const cpm = impressions > 0 ? ((spend / impressions) * 1000) : 0;
             const cpc = clicks > 0 ? (spend / clicks) : 0;
             const cpl = leads > 0 ? (spend / leads) : 0;
@@ -454,6 +589,18 @@ serve(async (req) => {
             continue;
           }
 
+          // LinkedIn REST API does not reliably return status on creative objects.
+          // Fall back to the parent campaign's status so the field is never null.
+          const effectiveCreativeStatus = creative.status ?? mappedStatus;
+
+          // Fetch thumbnail — reuse cached URL if already downloaded in a prior sync.
+          // This avoids redundant API calls and re-uploads on every daily sync run.
+          let thumbnailUrl = thumbCache.get(creative.id) ?? null;
+          if (!thumbnailUrl && creative.reference) {
+            thumbnailUrl = await fetchCreativeThumbnail(creative.reference, creative.id, supabaseClient);
+            if (thumbnailUrl) thumbCache.set(creative.id, thumbnailUrl);
+          }
+
           const creativeAnalyticsData = await creativeAnalyticsRes.json();
           for (const stat of (creativeAnalyticsData.elements || [])) {
             const date = `${stat.dateRange.start.year}-${String(stat.dateRange.start.month).padStart(2, '0')}-${String(stat.dateRange.start.day).padStart(2, '0')}`;
@@ -466,7 +613,7 @@ serve(async (req) => {
                 campaign_id: dbCampaign.id,
                 creative_id: creative.id,
                 creative_name: creative.name,
-                status: creative.status,
+                status: effectiveCreativeStatus,
                 date,
                 spend_eur: Number(stat.costInLocalCurrency) || 0,
                 impressions,
@@ -475,6 +622,9 @@ serve(async (req) => {
                 ctr: impressions > 0 ? (clicks / impressions) : 0,
                 engagements: stat.totalEngagements || clicks,
                 landing_page_clicks: stat.landingPageClicks || 0,
+                reference: creative.reference,
+                creative_url: creative.creative_url,
+                thumbnail_url: thumbnailUrl,
               }, { onConflict: 'campaign_id,creative_id,date' });
           }
         }
