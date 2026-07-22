@@ -157,20 +157,20 @@ export default function TOFUPage() {
   const showCampaignCol = filteredCampaigns.length > 1;
 
   // ── Key metrics ─────────────────────────────────────────────────────────
-  const completed    = filteredCampaigns.filter(c => c.status === 'COMPLETED');
-  const active       = filteredCampaigns.filter(c => c.status === 'ACTIVE');
+  const completed = filteredCampaigns.filter(c => c.status === 'COMPLETED');
+  const active = filteredCampaigns.filter(c => c.status === 'ACTIVE');
   const completedAds = completed.reduce((a, c) => a + c.ad_count, 0);
-  const activeAds    = active.reduce((a, c) => a + c.ad_count, 0);
+  const activeAds = active.reduce((a, c) => a + c.ad_count, 0);
 
-  const totalAds         = filteredCampaigns.reduce((a, c) => a + c.ad_count, 0);
-  const totalSpend       = sum(filteredCampaigns, 'spend_eur');
-  const totalReach       = sum(filteredCampaigns, 'reach');
+  const totalAds = filteredCampaigns.reduce((a, c) => a + c.ad_count, 0);
+  const totalSpend = sum(filteredCampaigns, 'spend_eur');
+  const totalReach = sum(filteredCampaigns, 'reach');
   const totalImpressions = sum(filteredCampaigns, 'impressions');
-  const totalClicks      = sum(filteredCampaigns, 'clicks');
-  const avgCPM           = totalImpressions ? (totalSpend / totalImpressions) * 1000 : 0;
-  const avgCPC           = totalClicks ? totalSpend / totalClicks : 0;
-  const avgCTR           = wavg(filteredCampaigns, 'ctr', 'impressions');
-  const avgEngRate       = wavg(filteredCampaigns, 'engagement_rate', 'impressions');
+  const totalClicks = sum(filteredCampaigns, 'clicks');
+  const avgCPM = totalImpressions ? (totalSpend / totalImpressions) * 1000 : 0;
+  const avgCPC = totalClicks ? totalSpend / totalClicks : 0;
+  const avgCTR = wavg(filteredCampaigns, 'ctr', 'impressions');
+  const avgEngRate = wavg(filteredCampaigns, 'engagement_rate', 'impressions');
 
   // ── Loading / Error states ──────────────────────────────────────────────
   if (isLoading) {
@@ -363,7 +363,7 @@ export default function TOFUPage() {
             </p>
           </div>
           <ChartContainer>
-            <div style={{ overflowX: 'auto' }}>
+            <div>
               <table className="ad-asset-table">
                 <thead>
                   <tr>
@@ -480,9 +480,9 @@ export default function TOFUPage() {
 
           {/* ── Daily Ad Performance (Raw) ── */}
           <SectionHeader>Daily Ad Performance</SectionHeader>
-          
+
           <ChartContainer>
-            <div style={{ overflowX: 'auto' }}>
+            <div>
               <table className="ad-asset-table">
                 <thead>
                   <tr>
