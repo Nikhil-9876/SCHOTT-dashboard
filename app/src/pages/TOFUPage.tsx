@@ -334,7 +334,7 @@ export default function TOFUPage() {
           <div className="grid-2">
             <ChartContainer title="Impressions by Campaign">
               <BarChart
-                labels={filteredCampaigns.map(c => c.name)}
+                labels={filteredCampaigns.map(c => c.objective)}
                 values={filteredCampaigns.map(c => c.latest_metric?.impressions ?? 0)}
                 colors={filteredCampaigns.map((_, i) => i === 0 ? '#062E62' : '#0050FF')}
                 height={280}
@@ -342,7 +342,7 @@ export default function TOFUPage() {
             </ChartContainer>
             <ChartContainer title="CTR by Campaign">
               <BarChart
-                labels={filteredCampaigns.map(c => c.name)}
+                labels={filteredCampaigns.map(c => c.objective)}
                 values={filteredCampaigns.map(c => parseFloat(((c.latest_metric?.ctr ?? 0) * 100).toFixed(2)))}
                 colors={filteredCampaigns.map((_, i) => i === 0 ? '#062E62' : '#0050FF')}
                 height={280}
