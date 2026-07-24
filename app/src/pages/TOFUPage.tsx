@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { useAdPerformance, useCampaignMetrics } from '../lib/queries';
+import { useAdPerformance, useCampaignMetrics, useIngestionLog } from '../lib/queries';
 import { formatEUR, formatEURCompact, formatNumber, formatPercent } from '../lib/formatters';
 import MetricCard from '../components/ui/MetricCard';
 import SectionHeader from '../components/ui/SectionHeader';
@@ -153,6 +153,8 @@ export default function TOFUPage() {
     return filteredAdRows.filter(r => selectedAdKeys.has(`${r.campaign_id}__${r.creative_id}`));
   }, [filteredAdRows, selectedAdKeys]);
 
+  const { data: logs } = useIngestionLog();
+
   // Show Campaign column only when multiple campaigns are visible (All objectives)
   const showCampaignCol = filteredCampaigns.length > 1;
 
@@ -202,6 +204,7 @@ export default function TOFUPage() {
   }
 
   if (data.length === 0) {
+    const hasSynced = logs && logs.length > 0;
     return (
       <div className="content">
         <div className="page-header page-header-tofu">
@@ -209,7 +212,17 @@ export default function TOFUPage() {
           <p>TOFU • Awareness Stage</p>
         </div>
         <div style={{ padding: '3rem', textAlign: 'center', color: '#5A6577', background: '#fff', border: '1px solid #E0E4EA' }}>
-          No data synced yet. Click <strong>Sync Now</strong> to load your LinkedIn campaigns.
+          <p style={{ fontSize: '15px', marginBottom: '0.5rem', fontWeight: 600, color: '#062E62' }}>
+            {hasSynced ? 'No matching campaign data found' : 'No data synced yet'}
+          </p>
+          {hasSynced && (
+            <p style={{ marginBottom: '0.5rem' }}>
+              A sync has been performed, but no campaigns matching the TOFU (Awareness) stage criteria were found.
+            </p>
+          )}
+          <p>
+            Click <strong>Sync Now</strong> in the header to {hasSynced ? 'refresh' : 'load your LinkedIn campaigns'}.
+          </p>
         </div>
         <Footer />
       </div>

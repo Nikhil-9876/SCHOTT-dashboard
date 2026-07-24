@@ -1,4 +1,4 @@
-import { useCampaignMetrics } from '../lib/queries';
+import { useCampaignMetrics, useIngestionLog } from '../lib/queries';
 import { formatEUR, formatEURCompact, formatNumber, formatPercent } from '../lib/formatters';
 import MetricCard from '../components/ui/MetricCard';
 import SectionHeader from '../components/ui/SectionHeader';
@@ -46,7 +46,10 @@ export default function BOFUPage() {
     );
   }
 
+  const { data: logs } = useIngestionLog();
+
   if (data.length === 0) {
+    const hasSynced = logs && logs.length > 0;
     return (
       <div className="content">
         <div className="page-header page-header-bofu">
@@ -54,7 +57,17 @@ export default function BOFUPage() {
           <p>BOFU • Lead Gen</p>
         </div>
         <div style={{ padding: '3rem', textAlign: 'center', color: '#5A6577', background: '#fff', border: '1px solid #E0E4EA' }}>
-          No data synced yet. Click <strong>Sync Now</strong> to load your LinkedIn campaigns.
+          <p style={{ fontSize: '15px', marginBottom: '0.5rem', fontWeight: 600, color: '#062E62' }}>
+            {hasSynced ? 'No matching campaign data found' : 'No data synced yet'}
+          </p>
+          {hasSynced && (
+            <p style={{ marginBottom: '0.5rem' }}>
+              A sync has been performed, but no campaigns matching the BOFU (Lead Gen) stage criteria were found.
+            </p>
+          )}
+          <p>
+            Click <strong>Sync Now</strong> in the header to {hasSynced ? 'refresh' : 'load your LinkedIn campaigns'}.
+          </p>
         </div>
         <Footer />
       </div>

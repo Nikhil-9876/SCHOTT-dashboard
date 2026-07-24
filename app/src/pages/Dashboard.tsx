@@ -1,4 +1,4 @@
-import { useCampaignMetrics } from '../lib/queries';
+import { useCampaignMetrics, useIngestionLog } from '../lib/queries';
 import { formatEURCompact, formatNumber, formatPercent } from '../lib/formatters';
 import SummaryCard from '../components/ui/SummaryCard';
 import FunnelCard from '../components/ui/FunnelCard';
@@ -15,6 +15,7 @@ function sumMetric(campaigns: CampaignWithMetrics[], key: keyof NonNullable<Camp
 
 export default function Dashboard() {
   const { data: all, isLoading, isError, refetch } = useCampaignMetrics();
+  const { data: logs } = useIngestionLog();
 
   if (isLoading) {
     return (
@@ -50,11 +51,21 @@ export default function Dashboard() {
 
   // If no data at all, show empty state
   if (all.length === 0) {
+    const hasSynced = logs && logs.length > 0;
     return (
       <div className="content">
         <div style={{ padding: '3rem', textAlign: 'center', color: '#5A6577', background: '#fff', border: '1px solid #E0E4EA' }}>
-          <p style={{ fontSize: '15px', marginBottom: '0.5rem', fontWeight: 600, color: '#062E62' }}>No data synced yet</p>
-          <p>Click <strong>Sync Now</strong> in the header to load your LinkedIn campaigns.</p>
+          <p style={{ fontSize: '15px', marginBottom: '0.5rem', fontWeight: 600, color: '#062E62' }}>
+            {hasSynced ? 'No campaign data found' : 'No data synced yet'}
+          </p>
+          {hasSynced && (
+            <p style={{ marginBottom: '0.5rem' }}>
+              A sync has been performed, but no campaign data was found.
+            </p>
+          )}
+          <p>
+            Click <strong>Sync Now</strong> in the header to {hasSynced ? 'refresh' : 'load your LinkedIn campaigns'}.
+          </p>
         </div>
         <Footer />
       </div>
