@@ -1,10 +1,12 @@
 import { useIngestionLog, useTriggerIngestion, useLinkedInConnection, useDisconnectLinkedIn } from '../../lib/queries';
+import { useSafety } from '../../context/SafetyContext';
 
 export default function IngestionStatus() {
   const { data: logs } = useIngestionLog();
   const { mutate: sync, isPending, error: syncError } = useTriggerIngestion();
   const { data: isConnected, isLoading: isConnectionLoading } = useLinkedInConnection();
   const { mutate: disconnect, isPending: isDisconnecting, error: disconnectError } = useDisconnectLinkedIn();
+  const { isDisconnectEnabled } = useSafety();
 
   const lastLog = logs?.[0];
   const hasSyncError = !!syncError;
@@ -49,17 +51,18 @@ export default function IngestionStatus() {
           </button>
           <button
             className="btn"
-            style={{ 
-              padding: '0.45rem 1rem', 
-              fontSize: '12px', 
-              backgroundColor: '#ef4444', 
-              color: 'white', 
-              border: 'none', 
+            style={{
+              padding: '0.45rem 1rem',
+              fontSize: '12px',
+              backgroundColor: '#ef4444',
+              color: 'white',
+              border: 'none',
               borderRadius: '4px',
-              cursor: 'pointer' 
+              cursor: isDisconnectEnabled ? 'pointer' : 'not-allowed',
+              opacity: isDisconnectEnabled ? 1 : 0.7
             }}
             onClick={() => disconnect()}
-            disabled={isDisconnecting}
+            disabled={isDisconnecting || !isDisconnectEnabled}
           >
             {isDisconnecting ? 'Disconnecting...' : 'Disconnect'}
           </button>
