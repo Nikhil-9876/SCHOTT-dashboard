@@ -13,11 +13,18 @@
 }
 
 /* ── BASE ── */
+html {
+  background: var(--color-navy);
+  overscroll-behavior-y: none;
+}
+
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   background: #F4F5F7;
   color: #1A1A1A;
   font-size: 14px;
+  overscroll-behavior-y: none;
+  padding-top: 64px;
 }
 
 /* ── SCHOTT DESIGN TOKENS — zero border-radius, flat design ── */
@@ -36,12 +43,15 @@ body {
 /* ── HEADER ── */
 .schott-header {
   background: var(--color-navy);
-  padding: 1.25rem 2rem;
+  padding: 0 2rem;
+  height: 64px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  position: sticky;
+  position: fixed;
   top: 0;
+  left: 0;
+  right: 0;
   z-index: 100;
 }
 
