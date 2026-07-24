@@ -21,6 +21,7 @@ function wavg(campaigns: CampaignWithMetrics[], key: keyof NonNullable<CampaignW
 
 export default function BOFUPage() {
   const { data, isLoading, isError, refetch } = useCampaignMetrics('BOFU');
+  const { data: logs } = useIngestionLog();
 
   if (isLoading) {
     return (
@@ -45,8 +46,6 @@ export default function BOFUPage() {
       </div>
     );
   }
-
-  const { data: logs } = useIngestionLog();
 
   if (data.length === 0) {
     const hasSynced = logs && logs.length > 0;

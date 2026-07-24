@@ -101,6 +101,7 @@ function aggregateAdsByCreative(rows: AdPerformanceMetric[], campaignNameMap: Re
 export default function TOFUPage() {
   const { data, isLoading, isError, refetch } = useCampaignMetrics('TOFU');
   const { data: adPerformance = [] } = useAdPerformance('TOFU');
+  const { data: logs } = useIngestionLog();
 
   const [selectedObjective, setSelectedObjective] = useState<Objective>('All');
   const [selectedAdKeys, setSelectedAdKeys] = useState<Set<string>>(new Set());
@@ -153,7 +154,6 @@ export default function TOFUPage() {
     return filteredAdRows.filter(r => selectedAdKeys.has(`${r.campaign_id}__${r.creative_id}`));
   }, [filteredAdRows, selectedAdKeys]);
 
-  const { data: logs } = useIngestionLog();
 
   // Show Campaign column only when multiple campaigns are visible (All objectives)
   const showCampaignCol = filteredCampaigns.length > 1;

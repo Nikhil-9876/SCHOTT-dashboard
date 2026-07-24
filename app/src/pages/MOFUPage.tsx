@@ -20,6 +20,7 @@ function wavg(campaigns: CampaignWithMetrics[], key: keyof NonNullable<CampaignW
 
 export default function MOFUPage() {
   const { data, isLoading, isError, refetch } = useCampaignMetrics('MOFU');
+  const { data: logs } = useIngestionLog();
 
   if (isLoading) {
     return (
@@ -47,8 +48,6 @@ export default function MOFUPage() {
       </div>
     );
   }
-
-  const { data: logs } = useIngestionLog();
 
   if (data.length === 0) {
     const hasSynced = logs && logs.length > 0;
