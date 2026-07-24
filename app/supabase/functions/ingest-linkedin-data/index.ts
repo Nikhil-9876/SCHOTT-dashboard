@@ -114,10 +114,10 @@ function getSyncDateRange(lastSuccessfulSyncAt: Date | null, now: Date, initialL
     };
   }
 
-  // Keep a one-day overlap because LinkedIn reporting settles daily and prior-day
-  // metrics can change after the previous sync ran.
+  // Keep a 3-day overlap (subtracting 2 days from the last sync date) to ensure
+  // metrics like reach (which require a full 24-hour window to settle) are updated.
   return {
-    startDate: startOfUtcDay(lastSuccessfulSyncAt),
+    startDate: addUtcDays(startOfUtcDay(lastSuccessfulSyncAt), -2),
     endDate: today,
   };
 }
