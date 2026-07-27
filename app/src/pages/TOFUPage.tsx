@@ -8,6 +8,7 @@ import Badge from '../components/ui/Badge';
 import BarChart from '../components/charts/BarChart';
 import Footer from '../components/layout/Footer';
 import { SkeletonCard, SkeletonChart } from '../components/ui/Skeleton';
+import AssetThumbnail from '../components/ui/AssetThumbnail';
 import type { CampaignWithMetrics, AdPerformanceMetric } from '../types';
 
 // ── Objective detection ────────────────────────────────────────────────────
@@ -188,12 +189,12 @@ export default function TOFUPage() {
       if (bVal === null || bVal === undefined) return sortAscending ? 1 : -1;
 
       if (typeof aVal === 'string') {
-        return sortAscending 
-          ? aVal.localeCompare(bVal) 
+        return sortAscending
+          ? aVal.localeCompare(bVal)
           : bVal.localeCompare(aVal);
       } else {
-        return sortAscending 
-          ? aVal - bVal 
+        return sortAscending
+          ? aVal - bVal
           : bVal - aVal;
       }
     });
@@ -521,21 +522,11 @@ export default function TOFUPage() {
                           />
                         </td>
                         <td className="td-thumb">
-                          {row.creative_url ? (
-                            <a href={row.creative_url} target="_blank" rel="noopener noreferrer" title={`Preview: ${row.creative_name}`}>
-                              {row.thumbnail_url ? (
-                                <img src={row.thumbnail_url} alt={row.creative_name} className="ad-thumb" />
-                              ) : (
-                                <span className="ad-thumb-placeholder" title="No preview available">🖼️</span>
-                              )}
-                            </a>
-                          ) : (
-                            row.thumbnail_url ? (
-                              <img src={row.thumbnail_url} alt={row.creative_name} className="ad-thumb" />
-                            ) : (
-                              <span className="ad-thumb-placeholder">🖼️</span>
-                            )
-                          )}
+                          <AssetThumbnail
+                            thumbnailUrl={row.thumbnail_url}
+                            creativeName={row.creative_name}
+                            creativeUrl={row.creative_url}
+                          />
                         </td>
                         <td className="td-asset-id hide-md">
                           <code className="linkedin-id" title={row.creative_id}>{numericId}</code>
@@ -623,21 +614,11 @@ export default function TOFUPage() {
                       <tr key={`${row.campaign_id}-${row.creative_id}-${row.date}`}>
                         <td className="td-nowrap">{new Date(row.date).toLocaleDateString('en-GB')}</td>
                         <td className="td-thumb">
-                          {row.creative_url ? (
-                            <a href={row.creative_url} target="_blank" rel="noopener noreferrer" title={`Preview: ${row.creative_name}`}>
-                              {row.thumbnail_url ? (
-                                <img src={row.thumbnail_url} alt={row.creative_name} className="ad-thumb" />
-                              ) : (
-                                <span className="ad-thumb-placeholder">🖼️</span>
-                              )}
-                            </a>
-                          ) : (
-                            row.thumbnail_url ? (
-                              <img src={row.thumbnail_url} alt={row.creative_name} className="ad-thumb" />
-                            ) : (
-                              <span className="ad-thumb-placeholder">🖼️</span>
-                            )
-                          )}
+                          <AssetThumbnail
+                            thumbnailUrl={row.thumbnail_url}
+                            creativeName={row.creative_name}
+                            creativeUrl={row.creative_url}
+                          />
                         </td>
                         <td className="td-asset-id hide-md">
                           <code className="linkedin-id" title={row.creative_id}>{numericId}</code>
