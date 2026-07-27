@@ -810,3 +810,27 @@ a:hover .ad-thumb {
     padding: 1rem;
   }
 }
+
+/* ── TABLE WRAPPER FOR PREVENTING VIEWPORT HORIZONTAL SCROLL ── */
+.table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ── RESPONSIVE COLUMN HIDING TO PREVENT HORIZONTAL SCROLL ── */
+@media (max-width: 1200px) {
+  .hide-lg {
+    display: none !important;
+  }
+}
+@media (max-width: 992px) {
+  .hide-md {
+    display: none !important;
+  }
+}
+@media (max-width: 768px) {
+  .hide-sm {
+    display: none !important;
+  }
+}

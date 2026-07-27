@@ -122,34 +122,36 @@ export default function BOFUPage() {
 
       <SectionHeader>Campaign Details</SectionHeader>
       <ChartContainer>
-        <table>
-          <thead>
-            <tr>
-              <th>Campaign Name</th><th>Status</th><th>Ads</th>
-              <th>Spend (€)</th><th>Clicks</th><th>CTR %</th>
-              <th>Leads</th><th>CPL (€)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.map(c => {
-              const m = c.latest_metric;
-              const spend = m?.spend_eur ?? 0;
-              const cpl = m?.leads ? spend / m.leads : 0;
-              return (
-                <tr key={c.id}>
-                  <td>{c.name}</td>
-                  <td><Badge status={c.status} /></td>
-                  <td>{c.ad_count}</td>
-                  <td>{formatEUR(spend)}</td>
-                  <td>{formatNumber(m?.clicks ?? 0)}</td>
-                  <td>{formatPercent(m?.ctr ?? 0)}</td>
-                  <td>{m?.leads ?? 0}</td>
-                  <td>{formatEUR(cpl)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <div className="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Campaign Name</th><th>Status</th><th>Ads</th>
+                <th>Spend (€)</th><th>Clicks</th><th>CTR %</th>
+                <th>Leads</th><th>CPL (€)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.map(c => {
+                const m = c.latest_metric;
+                const spend = m?.spend_eur ?? 0;
+                const cpl = m?.leads ? spend / m.leads : 0;
+                return (
+                  <tr key={c.id}>
+                    <td>{c.name}</td>
+                    <td><Badge status={c.status} /></td>
+                    <td>{c.ad_count}</td>
+                    <td>{formatEUR(spend)}</td>
+                    <td>{formatNumber(m?.clicks ?? 0)}</td>
+                    <td>{formatPercent(m?.ctr ?? 0)}</td>
+                    <td>{m?.leads ?? 0}</td>
+                    <td>{formatEUR(cpl)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </ChartContainer>
 
       <div className="grid-2">

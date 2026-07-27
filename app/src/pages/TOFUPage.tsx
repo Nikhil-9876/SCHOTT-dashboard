@@ -302,45 +302,47 @@ export default function TOFUPage() {
           {/* Campaign Details */}
           <SectionHeader>Campaign Details</SectionHeader>
           <ChartContainer>
-            <table>
-              <thead>
-                <tr>
-                  <th>Campaign Name</th><th>Objective</th><th>Status</th><th>Ads</th>
-                  <th>Spent</th><th>Impressions</th><th>Reach</th><th>Clicks</th>
-                  <th>CTR</th><th>CPM</th><th>CPC</th><th>Leads</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredCampaigns.map(c => {
-                  const m = c.latest_metric;
-                  const spend = m?.spend_eur ?? 0;
-                  const impressions = m?.impressions ?? 0;
-                  const clicks = m?.clicks ?? 0;
-                  const cpm = impressions ? (spend / impressions) * 1000 : 0;
-                  const cpc = clicks ? spend / clicks : 0;
-                  return (
-                    <tr key={c.id}>
-                      <td>{c.name}</td>
-                      <td>
-                        <span className={`objective-tag objective-${c.objective.toLowerCase().replace(' ', '-')}`}>
-                          {c.objective}
-                        </span>
-                      </td>
-                      <td><Badge status={c.status} /></td>
-                      <td>{c.ad_count}</td>
-                      <td>{formatEUR(spend)}</td>
-                      <td>{formatNumber(impressions)}</td>
-                      <td>{formatNumber(m?.reach ?? 0)}</td>
-                      <td>{formatNumber(clicks)}</td>
-                      <td>{formatPercent(m?.ctr ?? 0)}</td>
-                      <td>{formatEUR(cpm)}</td>
-                      <td>{formatEUR(cpc)}</td>
-                      <td>{formatNumber(m?.leads ?? 0)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Campaign Name</th><th>Objective</th><th>Status</th><th>Ads</th>
+                    <th>Spent</th><th>Impressions</th><th>Reach</th><th>Clicks</th>
+                    <th>CTR</th><th>CPM</th><th>CPC</th><th>Leads</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredCampaigns.map(c => {
+                    const m = c.latest_metric;
+                    const spend = m?.spend_eur ?? 0;
+                    const impressions = m?.impressions ?? 0;
+                    const clicks = m?.clicks ?? 0;
+                    const cpm = impressions ? (spend / impressions) * 1000 : 0;
+                    const cpc = clicks ? spend / clicks : 0;
+                    return (
+                      <tr key={c.id}>
+                        <td>{c.name}</td>
+                        <td>
+                          <span className={`objective-tag objective-${c.objective.toLowerCase().replace(' ', '-')}`}>
+                            {c.objective}
+                          </span>
+                        </td>
+                        <td><Badge status={c.status} /></td>
+                        <td>{c.ad_count}</td>
+                        <td>{formatEUR(spend)}</td>
+                        <td>{formatNumber(impressions)}</td>
+                        <td>{formatNumber(m?.reach ?? 0)}</td>
+                        <td>{formatNumber(clicks)}</td>
+                        <td>{formatPercent(m?.ctr ?? 0)}</td>
+                        <td>{formatEUR(cpm)}</td>
+                        <td>{formatEUR(cpc)}</td>
+                        <td>{formatNumber(m?.leads ?? 0)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </ChartContainer>
 
           {/* Charts */}
@@ -376,7 +378,7 @@ export default function TOFUPage() {
             </p>
           </div>
           <ChartContainer>
-            <div>
+            <div className="table-wrapper">
               <table className="ad-asset-table">
                 <thead>
                   <tr>
@@ -395,17 +397,19 @@ export default function TOFUPage() {
                       />
                     </th>
                     <th className="th-thumb">Preview</th>
-                    <th>Asset ID</th>
+                    <th className="hide-md">Asset ID</th>
                     <th>Ad Name</th>
-                    {showCampaignCol && <th>Campaign</th>}
-                    <th>Status</th>
+                    {showCampaignCol && <th className="hide-lg">Campaign</th>}
+                    <th className="hide-sm">Status</th>
                     <th className="th-num">Spend (€)</th>
                     <th className="th-num">Impressions</th>
-                    <th className="th-num">Reach</th>
+                    <th className="th-num hide-lg">Reach</th>
                     <th className="th-num">Clicks</th>
                     <th className="th-num">CTR</th>
-                    <th className="th-num">Engagements</th>
-                    <th className="th-num">Landing Page Clicks</th>
+                    <th className="th-num">CPM</th>
+                    <th className="th-num">CPC</th>
+                    <th className="th-num hide-md">Engagements</th>
+                    <th className="th-num hide-lg">Landing Page Clicks</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -413,6 +417,8 @@ export default function TOFUPage() {
                     const key = `${row.campaign_id}__${row.creative_id}`;
                     const isChecked = selectedAdKeys.has(key);
                     const numericId = row.creative_id.replace(/^urn:li:\w+:/, '');
+                    const cpm = row.impressions ? (row.spend_eur / row.impressions) * 1000 : 0;
+                    const cpc = row.clicks ? row.spend_eur / row.clicks : 0;
                     return (
                       <tr
                         key={key}
@@ -443,7 +449,7 @@ export default function TOFUPage() {
                             )
                           )}
                         </td>
-                        <td className="td-asset-id">
+                        <td className="td-asset-id hide-md">
                           <code className="linkedin-id" title={row.creative_id}>{numericId}</code>
                         </td>
                         <td>
@@ -464,24 +470,26 @@ export default function TOFUPage() {
                           )}
                         </td>
                         {showCampaignCol && (
-                          <td>
+                          <td className="hide-lg">
                             <div className="td-truncate-inner campaign-name" title={row.campaign_name}>{row.campaign_name}</div>
                           </td>
                         )}
-                        <td className="td-nowrap">{row.status ? <Badge status={row.status === 'ACTIVE' ? 'ACTIVE' : row.status === 'COMPLETED' ? 'COMPLETED' : 'PAUSED'} /> : <span className="td-dash">—</span>}</td>
+                        <td className="td-nowrap hide-sm">{row.status ? <Badge status={row.status === 'ACTIVE' ? 'ACTIVE' : row.status === 'COMPLETED' ? 'COMPLETED' : 'PAUSED'} /> : <span className="td-dash">—</span>}</td>
                         <td className="td-nowrap td-num">{formatEUR(row.spend_eur)}</td>
                         <td className="td-nowrap td-num">{formatNumber(row.impressions)}</td>
-                        <td className="td-nowrap td-num">{formatNumber(row.reach)}</td>
+                        <td className="td-nowrap td-num hide-lg">{formatNumber(row.reach)}</td>
                         <td className="td-nowrap td-num">{formatNumber(row.clicks)}</td>
                         <td className="td-nowrap td-num">{formatPercent(row.ctr, 3)}</td>
-                        <td className="td-nowrap td-num">{formatNumber(row.engagements)}</td>
-                        <td className="td-nowrap td-num">{formatNumber(row.landing_page_clicks)}</td>
+                        <td className="td-nowrap td-num">{formatEUR(cpm)}</td>
+                        <td className="td-nowrap td-num">{formatEUR(cpc)}</td>
+                        <td className="td-nowrap td-num hide-md">{formatNumber(row.engagements)}</td>
+                        <td className="td-nowrap td-num hide-lg">{formatNumber(row.landing_page_clicks)}</td>
                       </tr>
                     );
                   })}
                   {aggregatedAssets.length === 0 && (
                     <tr>
-                      <td colSpan={showCampaignCol ? 13 : 12} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>
+                      <td colSpan={showCampaignCol ? 15 : 14} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>
                         No ad data available for the current selection.
                       </td>
                     </tr>
@@ -495,27 +503,34 @@ export default function TOFUPage() {
           <SectionHeader>Daily Ad Performance</SectionHeader>
 
           <ChartContainer>
-            <div>
+            <div className="table-wrapper">
               <table className="ad-asset-table">
                 <thead>
                   <tr>
                     <th>Date</th>
                     <th className="th-thumb">Preview</th>
-                    <th>Asset ID</th>
+                    <th className="hide-md">Asset ID</th>
                     <th>Ad Name</th>
-                    <th>Status</th>
+                    <th className="hide-sm">Status</th>
                     <th className="th-num">Spend (€)</th>
                     <th className="th-num">Impressions</th>
-                    <th className="th-num">Reach</th>
+                    <th className="th-num hide-lg">Reach</th>
                     <th className="th-num">Clicks</th>
                     <th className="th-num">CTR</th>
-                    <th className="th-num">Engagements</th>
-                    <th className="th-num">Landing Page Clicks</th>
+                    <th className="th-num">CPM</th>
+                    <th className="th-num">CPC</th>
+                    <th className="th-num hide-md">Engagements</th>
+                    <th className="th-num hide-lg">Landing Page Clicks</th>
                   </tr>
                 </thead>
                 <tbody>
                   {dailyAdRows.map((row) => {
                     const numericId = row.creative_id.replace(/^urn:li:\w+:/, '');
+                    const spend = row.spend_eur ?? 0;
+                    const impressions = row.impressions ?? 0;
+                    const clicks = row.clicks ?? 0;
+                    const cpm = impressions ? (spend / impressions) * 1000 : 0;
+                    const cpc = clicks ? spend / clicks : 0;
                     return (
                       <tr key={`${row.campaign_id}-${row.creative_id}-${row.date}`}>
                         <td className="td-nowrap">{new Date(row.date).toLocaleDateString('en-GB')}</td>
@@ -536,7 +551,7 @@ export default function TOFUPage() {
                             )
                           )}
                         </td>
-                        <td className="td-asset-id">
+                        <td className="td-asset-id hide-md">
                           <code className="linkedin-id" title={row.creative_id}>{numericId}</code>
                         </td>
                         <td>
@@ -556,20 +571,22 @@ export default function TOFUPage() {
                             <div className="td-truncate-inner" title={row.creative_name}>{row.creative_name}</div>
                           )}
                         </td>
-                        <td className="td-nowrap">{row.status ? <Badge status={row.status === 'ACTIVE' ? 'ACTIVE' : row.status === 'COMPLETED' ? 'COMPLETED' : 'PAUSED'} /> : <span className="td-dash">—</span>}</td>
-                        <td className="td-nowrap td-num">{formatEUR(row.spend_eur ?? 0)}</td>
-                        <td className="td-nowrap td-num">{formatNumber(row.impressions ?? 0)}</td>
-                        <td className="td-nowrap td-num">{formatNumber(row.reach ?? 0)}</td>
-                        <td className="td-nowrap td-num">{formatNumber(row.clicks ?? 0)}</td>
+                        <td className="td-nowrap hide-sm">{row.status ? <Badge status={row.status === 'ACTIVE' ? 'ACTIVE' : row.status === 'COMPLETED' ? 'COMPLETED' : 'PAUSED'} /> : <span className="td-dash">—</span>}</td>
+                        <td className="td-nowrap td-num">{formatEUR(spend)}</td>
+                        <td className="td-nowrap td-num">{formatNumber(impressions)}</td>
+                        <td className="td-nowrap td-num hide-lg">{formatNumber(row.reach ?? 0)}</td>
+                        <td className="td-nowrap td-num">{formatNumber(clicks)}</td>
                         <td className="td-nowrap td-num">{formatPercent(row.ctr ?? 0, 3)}</td>
-                        <td className="td-nowrap td-num">{formatNumber(row.engagements ?? 0)}</td>
-                        <td className="td-nowrap td-num">{formatNumber(row.landing_page_clicks ?? 0)}</td>
+                        <td className="td-nowrap td-num">{formatEUR(cpm)}</td>
+                        <td className="td-nowrap td-num">{formatEUR(cpc)}</td>
+                        <td className="td-nowrap td-num hide-md">{formatNumber(row.engagements ?? 0)}</td>
+                        <td className="td-nowrap td-num hide-lg">{formatNumber(row.landing_page_clicks ?? 0)}</td>
                       </tr>
                     );
                   })}
                   {dailyAdRows.length === 0 && (
                     <tr>
-                      <td colSpan={12} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>
+                      <td colSpan={14} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>
                         No daily ad performance rows for the current selection.
                       </td>
                     </tr>
