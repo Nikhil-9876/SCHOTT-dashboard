@@ -307,8 +307,8 @@ export default function TOFUPage() {
                 <thead>
                   <tr>
                     <th>Campaign Name</th><th>Objective</th><th>Status</th><th>Ads</th>
-                    <th>Spent</th><th>Impressions</th><th>Reach</th><th>Clicks</th>
-                    <th>CTR</th><th>CPM</th><th>CPC</th><th>Leads</th>
+                    <th title="Total Spend in Euros">Spent</th><th>Impressions</th><th title="Total Unique Reach">Reach</th><th>Clicks</th>
+                    <th title="Click-Through Rate">CTR</th><th title="Cost Per Mille (Cost Per Thousand Impressions)">CPM</th><th title="Cost Per Click">CPC</th><th>Leads</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -401,15 +401,15 @@ export default function TOFUPage() {
                     <th>Ad Name</th>
                     {showCampaignCol && <th className="hide-lg">Campaign</th>}
                     <th className="hide-sm">Status</th>
-                    <th className="th-num">Spend (€)</th>
-                    <th className="th-num">Impressions</th>
-                    <th className="th-num hide-lg">Reach</th>
-                    <th className="th-num">Clicks</th>
-                    <th className="th-num">CTR</th>
-                    <th className="th-num">CPM</th>
-                    <th className="th-num">CPC</th>
-                    <th className="th-num hide-md">Engagements</th>
-                    <th className="th-num hide-lg">Landing Page Clicks</th>
+                    <th className="th-num" title="Total Spend in Euros">Spend (€)</th>
+                    <th className="th-num" title="Total Delivered Impressions">Impressions</th>
+                    <th className="th-num hide-lg" title="Total Unique Reach">Reach</th>
+                    <th className="th-num" title="Total Clicks">Clicks</th>
+                    <th className="th-num" title="Click-Through Rate">CTR</th>
+                    <th className="th-num" title="Cost Per Mille (Cost Per Thousand Impressions)">CPM</th>
+                    <th className="th-num" title="Cost Per Click">CPC</th>
+                    <th className="th-num hide-md" title="Total Engagements">Eng.</th>
+                    <th className="th-num hide-lg" title="Landing Page Clicks">LPC</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -512,15 +512,15 @@ export default function TOFUPage() {
                     <th className="hide-md">Asset ID</th>
                     <th>Ad Name</th>
                     <th className="hide-sm">Status</th>
-                    <th className="th-num">Spend (€)</th>
-                    <th className="th-num">Impressions</th>
-                    <th className="th-num hide-lg">Reach</th>
-                    <th className="th-num">Clicks</th>
-                    <th className="th-num">CTR</th>
-                    <th className="th-num">CPM</th>
-                    <th className="th-num">CPC</th>
-                    <th className="th-num hide-md">Engagements</th>
-                    <th className="th-num hide-lg">Landing Page Clicks</th>
+                    <th className="th-num" title="Total Spend in Euros">Spend (€)</th>
+                    <th className="th-num" title="Total Delivered Impressions">Impressions</th>
+                    <th className="th-num hide-lg" title="Total Unique Reach">Reach</th>
+                    <th className="th-num" title="Total Clicks">Clicks</th>
+                    <th className="th-num" title="Click-Through Rate">CTR</th>
+                    <th className="th-num" title="Cost Per Mille (Cost Per Thousand Impressions)">CPM</th>
+                    <th className="th-num" title="Cost Per Click">CPC</th>
+                    <th className="th-num hide-md" title="Total Engagements">Eng.</th>
+                    <th className="th-num hide-lg" title="Landing Page Clicks">LPC</th>
                   </tr>
                 </thead>
                 <tbody>

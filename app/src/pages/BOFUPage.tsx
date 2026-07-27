@@ -127,8 +127,8 @@ export default function BOFUPage() {
             <thead>
               <tr>
                 <th>Campaign Name</th><th>Status</th><th>Ads</th>
-                <th>Spend (€)</th><th>Clicks</th><th>CTR %</th>
-                <th>Leads</th><th>CPL (€)</th>
+                <th title="Total Spend in Euros">Spend (€)</th><th>Clicks</th><th title="Click-Through Rate %">CTR %</th>
+                <th>Leads</th><th title="Cost Per Lead (€)">CPL (€)</th>
               </tr>
             </thead>
             <tbody>
