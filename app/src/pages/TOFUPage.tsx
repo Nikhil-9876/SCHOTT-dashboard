@@ -120,6 +120,25 @@ export default function TOFUPage() {
     setSelectedAdKeys(new Set());
   }
 
+  // Sorting state for Ads by Asset table
+  const [sortField, setSortField] = useState<keyof AggregatedAd | 'cpm' | 'cpc'>('impressions');
+  const [sortAscending, setSortAscending] = useState<boolean>(false);
+
+  function handleSort(field: keyof AggregatedAd | 'cpm' | 'cpc') {
+    if (sortField === field) {
+      setSortAscending(prev => !prev);
+    } else {
+      setSortField(field);
+      const isStringField = field === 'creative_name' || field === 'campaign_name' || field === 'status' || field === 'creative_id';
+      setSortAscending(isStringField);
+    }
+  }
+
+  function renderSortIndicator(field: keyof AggregatedAd | 'cpm' | 'cpc') {
+    if (sortField !== field) return null;
+    return sortAscending ? ' ▲' : ' ▼';
+  }
+
   // ── Derived: campaigns with objective label ─────────────────────────────
   const campaignsWithObjective = useMemo(() => {
     if (!data) return [];
@@ -147,6 +166,38 @@ export default function TOFUPage() {
 
   // ── Aggregated assets ───────────────────────────────────────────────────
   const aggregatedAssets = useMemo(() => aggregateAdsByCreative(filteredAdRows, campaignNameMap), [filteredAdRows, campaignNameMap]);
+
+  // ── Sorted assets ───────────────────────────────────────────────────────
+  const sortedAssets = useMemo(() => {
+    return [...aggregatedAssets].sort((a, b) => {
+      let aVal: any;
+      let bVal: any;
+
+      if (sortField === 'cpm') {
+        aVal = a.impressions ? (a.spend_eur / a.impressions) * 1000 : 0;
+        bVal = b.impressions ? (b.spend_eur / b.impressions) * 1000 : 0;
+      } else if (sortField === 'cpc') {
+        aVal = a.clicks ? a.spend_eur / a.clicks : 0;
+        bVal = b.clicks ? b.spend_eur / b.clicks : 0;
+      } else {
+        aVal = a[sortField];
+        bVal = b[sortField];
+      }
+
+      if (aVal === null || aVal === undefined) return sortAscending ? -1 : 1;
+      if (bVal === null || bVal === undefined) return sortAscending ? 1 : -1;
+
+      if (typeof aVal === 'string') {
+        return sortAscending 
+          ? aVal.localeCompare(bVal) 
+          : bVal.localeCompare(aVal);
+      } else {
+        return sortAscending 
+          ? aVal - bVal 
+          : bVal - aVal;
+      }
+    });
+  }, [aggregatedAssets, sortField, sortAscending]);
 
   // ── Daily rows filtered by selected ads ─────────────────────────────────
   const dailyAdRows = useMemo(() => {
@@ -248,7 +299,10 @@ export default function TOFUPage() {
               <button
                 key={obj}
                 className={`filter-pill${selectedObjective === obj ? ' active' : ''}`}
-                onClick={() => setSelectedObjective(obj)}
+                onClick={() => {
+                  setSelectedObjective(obj);
+                  clearAdSelection();
+                }}
               >
                 {obj}
               </button>
@@ -258,7 +312,13 @@ export default function TOFUPage() {
 
         {selectedObjective !== 'All' && (
           <div className="filter-group" style={{ marginLeft: 'auto' }}>
-            <button className="filter-clear" onClick={() => setSelectedObjective('All')}>
+            <button
+              className="filter-clear"
+              onClick={() => {
+                setSelectedObjective('All');
+                clearAdSelection();
+              }}
+            >
               ✕ Clear
             </button>
           </div>
@@ -397,23 +457,51 @@ export default function TOFUPage() {
                       />
                     </th>
                     <th className="th-thumb">Preview</th>
-                    <th className="hide-md">Asset ID</th>
-                    <th>Ad Name</th>
-                    {showCampaignCol && <th className="hide-lg">Campaign</th>}
-                    <th className="hide-sm">Status</th>
-                    <th className="th-num" title="Total Spend in Euros">Spend (€)</th>
-                    <th className="th-num" title="Total Delivered Impressions">Impressions</th>
-                    <th className="th-num hide-lg" title="Total Unique Reach">Reach</th>
-                    <th className="th-num" title="Total Clicks">Clicks</th>
-                    <th className="th-num" title="Click-Through Rate">CTR</th>
-                    <th className="th-num" title="Cost Per Mille (Cost Per Thousand Impressions)">CPM</th>
-                    <th className="th-num" title="Cost Per Click">CPC</th>
-                    <th className="th-num hide-md" title="Total Engagements">Eng.</th>
-                    <th className="th-num hide-lg" title="Landing Page Clicks">LPC</th>
+                    <th className="hide-md" onClick={() => handleSort('creative_id')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                      Asset ID{renderSortIndicator('creative_id')}
+                    </th>
+                    <th onClick={() => handleSort('creative_name')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                      Ad Name{renderSortIndicator('creative_name')}
+                    </th>
+                    {showCampaignCol && (
+                      <th className="hide-lg" onClick={() => handleSort('campaign_name')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                        Campaign{renderSortIndicator('campaign_name')}
+                      </th>
+                    )}
+                    <th className="hide-sm" onClick={() => handleSort('status')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                      Status{renderSortIndicator('status')}
+                    </th>
+                    <th className="th-num" onClick={() => handleSort('spend_eur')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Spend in Euros">
+                      Spend (€){renderSortIndicator('spend_eur')}
+                    </th>
+                    <th className="th-num" onClick={() => handleSort('impressions')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Delivered Impressions">
+                      Impr{renderSortIndicator('impressions')}
+                    </th>
+                    <th className="th-num hide-lg" onClick={() => handleSort('reach')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Unique Reach">
+                      Reach{renderSortIndicator('reach')}
+                    </th>
+                    <th className="th-num" onClick={() => handleSort('clicks')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Clicks">
+                      Clicks{renderSortIndicator('clicks')}
+                    </th>
+                    <th className="th-num" onClick={() => handleSort('ctr')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Click-Through Rate">
+                      CTR{renderSortIndicator('ctr')}
+                    </th>
+                    <th className="th-num" onClick={() => handleSort('cpm')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Cost Per Mille (Cost Per Thousand Impressions)">
+                      CPM{renderSortIndicator('cpm')}
+                    </th>
+                    <th className="th-num" onClick={() => handleSort('cpc')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Cost Per Click">
+                      CPC{renderSortIndicator('cpc')}
+                    </th>
+                    <th className="th-num hide-md" onClick={() => handleSort('engagements')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Engagements">
+                      Eng.{renderSortIndicator('engagements')}
+                    </th>
+                    <th className="th-num hide-lg" onClick={() => handleSort('landing_page_clicks')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Landing Page Clicks">
+                      LPC{renderSortIndicator('landing_page_clicks')}
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {aggregatedAssets.map(row => {
+                  {sortedAssets.map(row => {
                     const key = `${row.campaign_id}__${row.creative_id}`;
                     const isChecked = selectedAdKeys.has(key);
                     const numericId = row.creative_id.replace(/^urn:li:\w+:/, '');
@@ -487,7 +575,7 @@ export default function TOFUPage() {
                       </tr>
                     );
                   })}
-                  {aggregatedAssets.length === 0 && (
+                  {sortedAssets.length === 0 && (
                     <tr>
                       <td colSpan={showCampaignCol ? 15 : 14} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>
                         No ad data available for the current selection.

@@ -836,3 +836,16 @@ a:hover .ad-thumb {
     display: none !important;
   }
 }
+
+/* Responsive header text for Impressions */
+.th-impressions-short {
+  display: none;
+}
+@media (max-width: 1350px) {
+  .th-impressions-full {
+    display: none;
+  }
+  .th-impressions-short {
+    display: inline;
+  }
+}
