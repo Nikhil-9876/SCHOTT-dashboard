@@ -62,3 +62,22 @@ export function formatEURCompact(value: number): string {
   if (value >= 1000) return `€${(value / 1000).toFixed(1)}K`;
   return formatEUR(value);
 }
+
+/**
+ * Compute the number of inclusive days between two ISO date strings.
+ * If `end` is null/undefined the current date is used (campaign still running).
+ * Returns null when start is missing.
+ */
+export function computeDays(start: string | null | undefined, end: string | null | undefined): number | null {
+  if (!start) return null;
+  const s = new Date(start);
+  const e = end ? new Date(end) : new Date();
+  if (isNaN(s.getTime()) || isNaN(e.getTime())) return null;
+  return Math.max(1, Math.round((e.getTime() - s.getTime()) / 86_400_000) + 1);
+}
+
+/** Format a day count as "42d", or "—" when null. */
+export function formatDays(days: number | null): string {
+  if (days === null || days === undefined) return '—';
+  return `${days}d`;
+}

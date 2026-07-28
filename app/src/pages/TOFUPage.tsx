@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useAdPerformance, useCampaignMetrics, useIngestionLog } from '../lib/queries';
-import { formatEUR, formatEURCompact, formatNumber, formatPercent } from '../lib/formatters';
+import { formatEUR, formatEURCompact, formatNumber, formatPercent, computeDays, formatDays } from '../lib/formatters';
 import MetricCard from '../components/ui/MetricCard';
 import SectionHeader from '../components/ui/SectionHeader';
 import ChartContainer from '../components/ui/ChartContainer';
@@ -9,6 +9,7 @@ import BarChart from '../components/charts/BarChart';
 import Footer from '../components/layout/Footer';
 import { SkeletonCard, SkeletonChart } from '../components/ui/Skeleton';
 import AssetThumbnail from '../components/ui/AssetThumbnail';
+import DatePickerCalendar from '../components/ui/DatePickerCalendar';
 import type { CampaignWithMetrics, AdPerformanceMetric } from '../types';
 
 // ── Objective detection ────────────────────────────────────────────────────
@@ -57,13 +58,24 @@ interface AggregatedAd {
   creative_url: string | null;
   reference: string | null;
   thumbnail_url: string | null;
+  days_running: number | null;
 }
 
 function aggregateAdsByCreative(rows: AdPerformanceMetric[], campaignNameMap: Record<string, string>): AggregatedAd[] {
   const map = new Map<string, AggregatedAd>();
+  // Track earliest and latest date per creative key
+  const minDate = new Map<string, string>();
+  const maxDate = new Map<string, string>();
 
   for (const row of rows) {
     const key = `${row.campaign_id}__${row.creative_id}`;
+    // Track date range
+    if (row.date) {
+      const prev = minDate.get(key);
+      if (!prev || row.date < prev) minDate.set(key, row.date);
+      const prevMax = maxDate.get(key);
+      if (!prevMax || row.date > prevMax) maxDate.set(key, row.date);
+    }
     const existing = map.get(key);
     if (existing) {
       existing.spend_eur += row.spend_eur ?? 0;
@@ -91,7 +103,19 @@ function aggregateAdsByCreative(rows: AdPerformanceMetric[], campaignNameMap: Re
         creative_url: row.creative_url ?? null,
         reference: row.reference ?? null,
         thumbnail_url: row.thumbnail_url ?? null,
+        days_running: null, // filled below
       });
+    }
+  }
+
+  // Compute days_running for each aggregated ad
+  for (const [key, ad] of map.entries()) {
+    const start = minDate.get(key);
+    const end = maxDate.get(key);
+    if (start) {
+      // If the ad is still active, count up to today; otherwise use last data date
+      const useEnd = ad.status === 'ACTIVE' ? undefined : end;
+      ad.days_running = computeDays(start, useEnd);
     }
   }
 
@@ -106,6 +130,7 @@ export default function TOFUPage() {
 
   const [selectedObjective, setSelectedObjective] = useState<Objective>('All');
   const [selectedAdKeys, setSelectedAdKeys] = useState<Set<string>>(new Set());
+  const [selectedDate, setSelectedDate] = useState<string>('');
 
   // Toggle a single ad selection
   function toggleAdSelection(key: string) {
@@ -133,6 +158,11 @@ export default function TOFUPage() {
       const isStringField = field === 'creative_name' || field === 'campaign_name' || field === 'status' || field === 'creative_id';
       setSortAscending(isStringField);
     }
+  }
+
+  function renderSortIndicatorAd(field: keyof AggregatedAd | 'cpm' | 'cpc') {
+    if (sortField !== field) return null;
+    return sortAscending ? ' ▲' : ' ▼';
   }
 
   function renderSortIndicator(field: keyof AggregatedAd | 'cpm' | 'cpc') {
@@ -200,11 +230,30 @@ export default function TOFUPage() {
     });
   }, [aggregatedAssets, sortField, sortAscending]);
 
-  // ── Daily rows filtered by selected ads ─────────────────────────────────
+  // ── Available dates for the date picker ───────────────────────────────────
+  const availableDates = useMemo(() => {
+    const s = new Set<string>();
+    for (const r of filteredAdRows) { if (r.date) s.add(r.date.slice(0, 10)); }
+    return s;
+  }, [filteredAdRows]);
+
+  const minAvailableDate = useMemo(() => {
+    if (availableDates.size === 0) return '';
+    return Array.from(availableDates).sort()[0];
+  }, [availableDates]);
+
+  const maxAvailableDate = useMemo(() => {
+    if (availableDates.size === 0) return '';
+    return Array.from(availableDates).sort().slice(-1)[0];
+  }, [availableDates]);
+
+  // ── Daily rows filtered by selected ads + date ─────────────────────────────
   const dailyAdRows = useMemo(() => {
-    if (selectedAdKeys.size === 0) return filteredAdRows;
-    return filteredAdRows.filter(r => selectedAdKeys.has(`${r.campaign_id}__${r.creative_id}`));
-  }, [filteredAdRows, selectedAdKeys]);
+    let rows = filteredAdRows;
+    if (selectedAdKeys.size > 0) rows = rows.filter(r => selectedAdKeys.has(`${r.campaign_id}__${r.creative_id}`));
+    if (selectedDate) rows = rows.filter(r => r.date?.slice(0, 10) === selectedDate);
+    return rows;
+  }, [filteredAdRows, selectedAdKeys, selectedDate]);
 
 
   // Show Campaign column only when multiple campaigns are visible (All objectives)
@@ -303,6 +352,7 @@ export default function TOFUPage() {
                 onClick={() => {
                   setSelectedObjective(obj);
                   clearAdSelection();
+                  setSelectedDate('');
                 }}
               >
                 {obj}
@@ -318,6 +368,7 @@ export default function TOFUPage() {
               onClick={() => {
                 setSelectedObjective('All');
                 clearAdSelection();
+                setSelectedDate('');
               }}
             >
               ✕ Clear
@@ -369,7 +420,7 @@ export default function TOFUPage() {
                   <tr>
                     <th>Campaign Name</th><th>Objective</th><th>Status</th><th>Ads</th>
                     <th title="Total Spend in Euros">Spent</th><th>Impressions</th><th title="Total Unique Reach">Reach</th><th>Clicks</th>
-                    <th title="Click-Through Rate">CTR</th><th title="Cost Per Mille (Cost Per Thousand Impressions)">CPM</th><th title="Cost Per Click">CPC</th><th>Leads</th>
+                    <th title="Click-Through Rate">CTR</th><th title="Cost Per Mille (Cost Per Thousand Impressions)">CPM</th><th title="Cost Per Click">CPC</th><th>Leads</th><th title="Number of days the campaign has been or was running">Days</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -398,6 +449,7 @@ export default function TOFUPage() {
                         <td>{formatEUR(cpm)}</td>
                         <td>{formatEUR(cpc)}</td>
                         <td>{formatNumber(m?.leads ?? 0)}</td>
+                        <td className="td-nowrap td-num">{formatDays(computeDays(m?.date_range_start, c.status === 'ACTIVE' ? undefined : m?.date_range_end))}</td>
                       </tr>
                     );
                   })}
@@ -458,22 +510,22 @@ export default function TOFUPage() {
                       />
                     </th>
                     <th className="th-thumb">Preview</th>
-                    <th className="hide-md" onClick={() => handleSort('creative_id')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                    <th className="hide-md" onClick={() => handleSort('creative_id')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: 88 }}>
                       Asset ID{renderSortIndicator('creative_id')}
                     </th>
-                    <th onClick={() => handleSort('creative_name')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                    <th onClick={() => handleSort('creative_name')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: '14%' }}>
                       Ad Name{renderSortIndicator('creative_name')}
                     </th>
                     {showCampaignCol && (
-                      <th className="hide-lg" onClick={() => handleSort('campaign_name')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                      <th className="hide-lg" onClick={() => handleSort('campaign_name')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: '10%' }}>
                         Campaign{renderSortIndicator('campaign_name')}
                       </th>
                     )}
-                    <th className="hide-sm" onClick={() => handleSort('status')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                    <th className="hide-sm" onClick={() => handleSort('status')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: 68 }}>
                       Status{renderSortIndicator('status')}
                     </th>
                     <th className="th-num" onClick={() => handleSort('spend_eur')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Spend in Euros">
-                      Spend (€){renderSortIndicator('spend_eur')}
+                      Spend{renderSortIndicator('spend_eur')}
                     </th>
                     <th className="th-num" onClick={() => handleSort('impressions')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Delivered Impressions">
                       Impr{renderSortIndicator('impressions')}
@@ -490,14 +542,17 @@ export default function TOFUPage() {
                     <th className="th-num" onClick={() => handleSort('cpm')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Cost Per Mille (Cost Per Thousand Impressions)">
                       CPM{renderSortIndicator('cpm')}
                     </th>
-                    <th className="th-num" onClick={() => handleSort('cpc')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Cost Per Click">
-                      CPC{renderSortIndicator('cpc')}
+                    <th className="th-num-xs" onClick={() => handleSort('cpc')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Cost Per Click">
+                      CPC{renderSortIndicatorAd('cpc')}
                     </th>
-                    <th className="th-num hide-md" onClick={() => handleSort('engagements')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Engagements">
-                      Eng.{renderSortIndicator('engagements')}
+                    <th className="th-num-xs hide-md" onClick={() => handleSort('engagements')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Engagements">
+                      Eng.{renderSortIndicatorAd('engagements')}
                     </th>
-                    <th className="th-num hide-lg" onClick={() => handleSort('landing_page_clicks')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Landing Page Clicks">
-                      LPC{renderSortIndicator('landing_page_clicks')}
+                    <th className="th-num-xs hide-lg" onClick={() => handleSort('landing_page_clicks')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Landing Page Clicks">
+                      LPC{renderSortIndicatorAd('landing_page_clicks')}
+                    </th>
+                    <th className="th-num-xs" onClick={() => handleSort('days_running')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Number of days the ad has been or was running">
+                      Days{renderSortIndicatorAd('days_running')}
                     </th>
                   </tr>
                 </thead>
@@ -563,6 +618,7 @@ export default function TOFUPage() {
                         <td className="td-nowrap td-num">{formatEUR(cpc)}</td>
                         <td className="td-nowrap td-num hide-md">{formatNumber(row.engagements)}</td>
                         <td className="td-nowrap td-num hide-lg">{formatNumber(row.landing_page_clicks)}</td>
+                        <td className="td-nowrap td-num">{formatDays(row.days_running)}</td>
                       </tr>
                     );
                   })}
@@ -579,20 +635,28 @@ export default function TOFUPage() {
           </ChartContainer>
 
           {/* ── Daily Ad Performance (Raw) ── */}
-          <SectionHeader>Daily Ad Performance</SectionHeader>
+          <div className="section-header-row">
+            <span className="section-header" style={{ margin: 0, border: 'none', paddingBottom: 0 }}>Daily Ad Performance</span>
+            <DatePickerCalendar
+              availableDates={availableDates}
+              selectedDate={selectedDate}
+              onSelect={setSelectedDate}
+              onClear={() => setSelectedDate('')}
+            />
+          </div>
 
           <ChartContainer>
             <div className="table-wrapper">
               <table className="ad-asset-table">
                 <thead>
                   <tr>
-                    <th>Date</th>
+                    <th style={{ width: 78 }}>Date</th>
                     <th className="th-thumb">Preview</th>
-                    <th className="hide-md">Asset ID</th>
-                    <th>Ad Name</th>
-                    <th className="hide-sm">Status</th>
-                    <th className="th-num" title="Total Spend in Euros">Spend (€)</th>
-                    <th className="th-num" title="Total Delivered Impressions">Impressions</th>
+                    <th className="hide-md" style={{ width: 88 }}>Asset ID</th>
+                    <th style={{ width: '14%' }}>Ad Name</th>
+                    <th className="hide-sm" style={{ width: 68 }}>Status</th>
+                    <th className="th-num" title="Total Spend in Euros">Spend</th>
+                    <th className="th-num" title="Total Delivered Impressions">Impr.</th>
                     <th className="th-num hide-lg" title="Total Unique Reach">Reach</th>
                     <th className="th-num" title="Total Clicks">Clicks</th>
                     <th className="th-num" title="Click-Through Rate">CTR</th>

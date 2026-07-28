@@ -1,5 +1,5 @@
 import { useCampaignMetrics, useIngestionLog } from '../lib/queries';
-import { formatEUR, formatEURCompact, formatNumber, formatPercent } from '../lib/formatters';
+import { formatEUR, formatEURCompact, formatNumber, formatPercent, computeDays, formatDays } from '../lib/formatters';
 import MetricCard from '../components/ui/MetricCard';
 import SectionHeader from '../components/ui/SectionHeader';
 import ChartContainer from '../components/ui/ChartContainer';
@@ -126,7 +126,7 @@ export default function MOFUPage() {
               <tr>
                 <th>Campaign Name</th><th>Status</th><th>Ads</th>
                 <th title="Total Spend in Euros">Spend (€)</th><th>Clicks</th><th title="Engagement Rate %">Eng. Rate %</th>
-                <th title="Click-Through Rate %">CTR %</th><th title="Cost Per Click (€)">CPC (€)</th><th>Leads</th><th title="Cost Per Lead (€)">CPL (€)</th>
+                <th title="Click-Through Rate %">CTR %</th><th title="Cost Per Click (€)">CPC (€)</th><th>Leads</th><th title="Cost Per Lead (€)">CPL (€)</th><th title="Number of days the campaign has been or was running">Days</th>
               </tr>
             </thead>
             <tbody>
@@ -147,6 +147,7 @@ export default function MOFUPage() {
                     <td>{formatEUR(cpc)}</td>
                     <td>{m?.leads ?? 0}</td>
                     <td>{formatEUR(cpl)}</td>
+                    <td className="td-nowrap td-num">{formatDays(computeDays(m?.date_range_start, c.status === 'ACTIVE' ? undefined : m?.date_range_end))}</td>
                   </tr>
                 );
               })}

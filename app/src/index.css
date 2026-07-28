@@ -414,7 +414,7 @@ thead tr {
 
 th {
   text-align: left;
-  padding: 0.65rem 1rem;
+  padding: 0.65rem 0.75rem;
   font-size: 11px;
   font-weight: 700;
   color: var(--color-muted);
@@ -424,7 +424,7 @@ th {
 }
 
 td {
-  padding: 0.65rem 1rem;
+  padding: 0.65rem 0.75rem;
   border-bottom: 1px solid var(--color-surface);
   color: var(--color-text);
 }
@@ -435,6 +435,14 @@ tr:last-child td {
 
 tr:hover td {
   background: var(--color-page);
+}
+
+/* Campaign / text cells in standard (non-asset) tables — wrap instead of overflow */
+table:not(.ad-asset-table) tbody td:first-child {
+  max-width: 220px;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.4;
 }
 
 /* ── BADGES ── */
@@ -618,6 +626,237 @@ tr:hover td {
   letter-spacing: 0.3px;
 }
 
+/* ── SECTION HEADER ROW (heading + inline date filter) ── */
+.section-header-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin: 2rem 0 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid var(--color-navy);
+}
+
+.section-date-filter {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 2px;
+}
+
+/* Icon button that opens the calendar */
+.section-date-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  color: var(--color-navy);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  transition: border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.section-date-btn:hover {
+  border-color: var(--color-blue);
+  color: var(--color-blue);
+}
+
+.section-date-btn svg {
+  flex-shrink: 0;
+}
+
+/* Selected date label shown inside the button */
+.section-date-value {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-navy);
+}
+
+/* Tiny ✕ clear button */
+.section-date-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 700;
+  background: transparent;
+  color: var(--color-muted);
+  border: 1px solid var(--color-border);
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.12s;
+  line-height: 1;
+}
+
+.section-date-clear:hover {
+  background: #FEE2E2;
+  color: #B91C1C;
+  border-color: #FECACA;
+}
+
+/* ── CUSTOM CALENDAR POPUP ── */
+.date-picker-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 2px;
+}
+
+.cal-popup {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 1000;
+  background: #ffffff;
+  border: 1px solid var(--color-border);
+  box-shadow: 0 8px 28px rgba(6, 46, 98, 0.14), 0 2px 8px rgba(0, 0, 0, 0.07);
+  padding: 12px 12px 10px;
+  min-width: 224px;
+  user-select: none;
+}
+
+.cal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.cal-month-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-navy);
+  letter-spacing: 0.3px;
+}
+
+.cal-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  font-size: 16px;
+  line-height: 1;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  cursor: pointer;
+  color: var(--color-navy);
+  padding: 0;
+  transition: background 0.12s, border-color 0.12s;
+  font-family: inherit;
+}
+
+.cal-nav:hover {
+  background: var(--color-surface);
+  border-color: var(--color-blue);
+  color: var(--color-blue);
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.cal-weekday {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-muted);
+  text-align: center;
+  padding: 2px 0 6px;
+}
+
+.cal-day {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  font-size: 11.5px;
+  font-family: inherit;
+  border: 1px solid transparent;
+  cursor: pointer;
+  background: #fff;
+  color: var(--color-text);
+  padding: 0;
+  font-weight: 500;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+/* Dates WITH ad data — selectable */
+.cal-day--avail {
+  color: var(--color-navy);
+  font-weight: 700;
+  border-color: rgba(6, 46, 98, 0.12);
+}
+
+.cal-day--avail:hover {
+  background: #EFF3FB;
+  border-color: var(--color-blue);
+  color: var(--color-blue);
+}
+
+/* Selected date */
+.cal-day--selected {
+  background: var(--color-navy) !important;
+  color: #ffffff !important;
+  border-color: var(--color-navy) !important;
+  font-weight: 700;
+}
+
+/* Dates WITHOUT ad data — greyed out, not clickable */
+.cal-day--disabled {
+  color: #D1D5DB;
+  cursor: not-allowed;
+  font-weight: 400;
+  border-color: transparent;
+}
+
+.cal-day--disabled:hover {
+  background: #fff;
+  color: #D1D5DB;
+}
+
+/* Footer legend */
+.cal-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+  font-size: 10px;
+  color: var(--color-muted);
+}
+
+.cal-legend {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+}
+
+.cal-legend--avail {
+  background: var(--color-navy);
+  border: 1px solid rgba(6, 46, 98, 0.3);
+}
+
+.cal-legend--disabled {
+  background: #D1D5DB;
+}
+
 /* ── OBJECTIVE TAG ── */
 .objective-tag {
   display: inline-block;
@@ -655,28 +894,28 @@ code.linkedin-id {
 }
 
 /* ── AD ASSET TABLE ── */
-/* Auto-layout: columns size to their content, table fills full width */
+/* Fixed layout: every column gets its hinted width; text wraps, numbers don't */
 table.ad-asset-table {
-  table-layout: auto;
+  table-layout: fixed;
   width: 100%;
   font-size: 11.5px;
 }
 
 table.ad-asset-table th,
 table.ad-asset-table td {
-  padding: 0.5rem 0.35rem;
+  padding: 0.45rem 0.2rem;
 }
 
-/* Inner wrapper for truncation — works in auto-layout tables */
+/* Inner wrapper for ad-name truncation */
 .td-truncate-inner {
-  max-width: 120px;
+  max-width: 90px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .td-truncate-inner.campaign-name {
-  max-width: 100px;
+  max-width: 75px;
   font-size: 10.5px;
   color: var(--color-muted);
 }
@@ -694,15 +933,23 @@ a.creative-link:hover div {
 .td-num {
   text-align: right;
   font-variant-numeric: tabular-nums;
-  padding-right: 0.5rem;
+  padding-right: 0.35rem;
 }
 
 /* Right-align numeric headers to match their cells */
 th.th-num {
   text-align: right;
-  padding-right: 0.5rem;
-  width: 90px;
-  min-width: 90px;
+  padding-right: 0.35rem;
+  width: 68px;
+  min-width: 60px;
+}
+
+/* Compact numeric headers for the last few short columns */
+th.th-num-xs {
+  text-align: right;
+  padding-right: 0.35rem;
+  width: 50px;
+  min-width: 44px;
 }
 
 /* Muted secondary text */
@@ -818,6 +1065,13 @@ a:hover .ad-thumb {
   width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  /* Hide scrollbar visually — content still scrollable on touch/narrow screens */
+  scrollbar-width: none;        /* Firefox */
+  -ms-overflow-style: none;     /* IE/Edge */
+}
+
+.table-wrapper::-webkit-scrollbar {
+  display: none;                /* Chrome / Safari */
 }
 
 /* ── RESPONSIVE COLUMN HIDING TO PREVENT HORIZONTAL SCROLL ── */
