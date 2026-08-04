@@ -24,6 +24,12 @@ function aggregateCampaignMetrics(metrics: CampaignMetric[]): CampaignMetric | n
     spend_inr: acc.spend_inr + (Number(metric.spend_inr) || 0),
     spend_eur: acc.spend_eur + (Number(metric.spend_eur) || 0),
     leads: acc.leads + (Number(metric.leads) || 0),
+    video_views: acc.video_views + (Number(metric.video_views) || 0),
+    video_completions: acc.video_completions + (Number(metric.video_completions) || 0),
+    video_starts: acc.video_starts + (Number(metric.video_starts) || 0),
+    video_first_quartile_completions: acc.video_first_quartile_completions + (Number(metric.video_first_quartile_completions) || 0),
+    video_midpoint_completions: acc.video_midpoint_completions + (Number(metric.video_midpoint_completions) || 0),
+    video_third_quartile_completions: acc.video_third_quartile_completions + (Number(metric.video_third_quartile_completions) || 0),
   }), {
     impressions: 0,
     reach: 0,
@@ -31,6 +37,12 @@ function aggregateCampaignMetrics(metrics: CampaignMetric[]): CampaignMetric | n
     spend_inr: 0,
     spend_eur: 0,
     leads: 0,
+    video_views: 0,
+    video_completions: 0,
+    video_starts: 0,
+    video_first_quartile_completions: 0,
+    video_midpoint_completions: 0,
+    video_third_quartile_completions: 0,
   });
 
   const first = metrics[0];
@@ -55,6 +67,12 @@ function aggregateCampaignMetrics(metrics: CampaignMetric[]): CampaignMetric | n
     cpc_inr: totals.clicks > 0 ? totals.spend_inr / totals.clicks : 0,
     cpl_inr: totals.leads > 0 ? totals.spend_inr / totals.leads : 0,
     leads: totals.leads,
+    video_views: totals.video_views,
+    video_completions: totals.video_completions,
+    video_starts: totals.video_starts,
+    video_first_quartile_completions: totals.video_first_quartile_completions,
+    video_midpoint_completions: totals.video_midpoint_completions,
+    video_third_quartile_completions: totals.video_third_quartile_completions,
   };
 }
 
@@ -79,7 +97,13 @@ async function fetchCampaignMetrics(funnelStage?: FunnelStage): Promise<Campaign
         cpm_inr,
         cpc_inr,
         cpl_inr,
-        leads
+        leads,
+        video_views,
+        video_completions,
+        video_starts,
+        video_first_quartile_completions,
+        video_midpoint_completions,
+        video_third_quartile_completions
       )
     `)
     .order('ingested_at', { referencedTable: 'campaign_metrics', ascending: false });

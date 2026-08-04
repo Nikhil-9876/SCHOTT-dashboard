@@ -31,6 +31,12 @@ export interface CampaignMetric {
   cpc_inr: number | null;
   cpl_inr: number | null;
   leads: number | null;
+  video_views: number | null;
+  video_completions: number | null;
+  video_starts: number | null;
+  video_first_quartile_completions: number | null;
+  video_midpoint_completions: number | null;
+  video_third_quartile_completions: number | null;
 }
 
 export interface IngestionLog {
@@ -60,6 +66,12 @@ export interface AdPerformanceMetric {
   creative_url: string | null;
   thumbnail_url: string | null;
   ingested_at: string;
+  video_views: number | null;
+  video_completions: number | null;
+  video_starts: number | null;
+  video_first_quartile_completions: number | null;
+  video_midpoint_completions: number | null;
+  video_third_quartile_completions: number | null;
   campaign?: Pick<Campaign, 'id' | 'name' | 'funnel_stage'>;
 }
 

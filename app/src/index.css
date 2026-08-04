@@ -894,28 +894,82 @@ code.linkedin-id {
 }
 
 /* ── AD ASSET TABLE ── */
-/* Fixed layout: every column gets its hinted width; text wraps, numbers don't */
 table.ad-asset-table {
   table-layout: fixed;
+  /* columns are sized from th widths, not content */
   width: 100%;
+  min-width: 960px;
+  /* prevent over-compression on narrow viewports */
   font-size: 11.5px;
 }
 
+/* Default: clip overflowing content cleanly in fixed layout */
 table.ad-asset-table th,
 table.ad-asset-table td {
-  padding: 0.45rem 0.2rem;
+  padding: 0.6rem 0.5rem;
+  overflow: hidden;
 }
 
-/* Inner wrapper for ad-name truncation */
-.td-truncate-inner {
-  max-width: 90px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* ── FIXED LEFT COLUMNS (never shift between metric modes) ── */
+
+/* Col 1 — Checkbox */
+table.ad-asset-table th:nth-child(1),
+table.ad-asset-table td:nth-child(1) {
+  width: 36px;
+  padding: 0.6rem 0.5rem;
+}
+
+/* Col 2 — Preview / thumbnail */
+td.td-thumb,
+th.th-thumb {
+  width: 64px;
+  padding: 0.45rem 0.6rem;
+  text-align: center;
+}
+
+/* Col 3 — Asset ID */
+.td-asset-id {
+  width: 108px;
+  padding: 0.6rem 0.75rem;
   white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+table.ad-asset-table th:nth-child(3) {
+  width: 108px;
+  padding: 0.6rem 0.75rem;
+}
+
+/* Col 4 — Ad Name (widest text column) */
+.td-ad-name {
+  width: 160px;
+}
+
+.td-ad-name-inner,
+.td-truncate-inner {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.3;
+  word-break: break-word;
+  font-size: 11.5px;
+}
+
+table.ad-asset-table td:nth-child(4),
+table.ad-asset-table th:nth-child(4) {
+  width: 160px;
+  padding: 0.6rem 0.75rem;
+}
+
+/* Col 5 — Status */
+table.ad-asset-table td:nth-child(5),
+table.ad-asset-table th:nth-child(5) {
+  width: 62px;
+  padding: 0.6rem 0.2rem 0.6rem 0.4rem;
 }
 
 .td-truncate-inner.campaign-name {
-  max-width: 75px;
   font-size: 10.5px;
   color: var(--color-muted);
 }
@@ -929,27 +983,38 @@ a.creative-link:hover div {
   white-space: nowrap;
 }
 
-/* Right-align numeric values for easy scanning */
+/* ── VARIABLE METRIC COLUMNS (swap between video / general mode) ── */
+
+/* Standard metric column: Spend, Impressions, Reach, Clicks, CPM, CPV, Views, etc. */
 .td-num {
   text-align: right;
   font-variant-numeric: tabular-nums;
-  padding-right: 0.35rem;
+  padding-left: 0.3rem;
+  padding-right: 0.45rem;
 }
 
-/* Right-align numeric headers to match their cells */
+/* th-num → regular metric header (Spend, Impr, Reach, Clicks, CTR, CPM, Views…) */
 th.th-num {
-  text-align: right;
-  padding-right: 0.35rem;
   width: 68px;
-  min-width: 60px;
+  text-align: right;
+  padding-left: 0.3rem;
+  padding-right: 0.45rem;
 }
 
-/* Compact numeric headers for the last few short columns */
-th.th-num-xs {
+/* th-num-sm → small metric header (Clicks…) */
+th.th-num-sm {
+  width: 53px;
   text-align: right;
-  padding-right: 0.35rem;
+  padding-left: 0.3rem;
+  padding-right: 0.45rem;
+}
+
+/* th-num-xs → compact metric header (CPC, Eng., LPC, 25%, 50%, 75%, Days…) */
+th.th-num-xs {
   width: 50px;
-  min-width: 44px;
+  text-align: right;
+  padding-left: 0.3rem;
+  padding-right: 0.45rem;
 }
 
 /* Muted secondary text */
@@ -964,19 +1029,9 @@ th.th-num-xs {
   font-size: 12px;
 }
 
-/* Minimum widths for asset ID column */
-.td-asset-id {
-  white-space: nowrap;
-}
+/* .td-asset-id defined above with asset table rules */
 
-/* Thumbnail column — fixed narrow width */
-td.td-thumb,
-th.th-thumb {
-  width: 64px;
-  min-width: 64px;
-  padding: 4px;
-  text-align: center;
-}
+/* td.td-thumb / th.th-thumb defined above with asset table rules */
 
 /* Ad creative thumbnail image */
 .ad-thumb {
@@ -1066,13 +1121,18 @@ a:hover .ad-thumb {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   /* Hide scrollbar visually — content still scrollable on touch/narrow screens */
-  scrollbar-width: none;        /* Firefox */
-  -ms-overflow-style: none;     /* IE/Edge */
+  scrollbar-width: none;
+  /* Firefox */
+  -ms-overflow-style: none;
+  /* IE/Edge */
 }
 
 .table-wrapper::-webkit-scrollbar {
-  display: none;                /* Chrome / Safari */
+  display: none;
+  /* Chrome / Safari */
 }
+
+
 
 /* ── RESPONSIVE COLUMN HIDING TO PREVENT HORIZONTAL SCROLL ── */
 @media (max-width: 1200px) {
@@ -1134,6 +1194,7 @@ a:hover .ad-thumb {
     opacity: 0;
     transform: scale(0.85);
   }
+
   to {
     opacity: 1;
     transform: scale(1);
@@ -1158,4 +1219,21 @@ a:hover .ad-thumb {
   display: block;
   border-radius: 6px;
   object-fit: contain;
+}
+
+/* ── SMOOTH METRIC METRICS TRANSITION ── */
+@keyframes metricSwapFade {
+  from {
+    opacity: 0.1;
+    transform: translateY(2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.metric-swap-cell {
+  animation: metricSwapFade 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }

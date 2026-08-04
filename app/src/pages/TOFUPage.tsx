@@ -59,6 +59,12 @@ interface AggregatedAd {
   reference: string | null;
   thumbnail_url: string | null;
   days_running: number | null;
+  video_views: number;
+  video_completions: number;
+  video_starts: number;
+  video_first_quartile_completions: number;
+  video_midpoint_completions: number;
+  video_third_quartile_completions: number;
 }
 
 function aggregateAdsByCreative(rows: AdPerformanceMetric[], campaignNameMap: Record<string, string>): AggregatedAd[] {
@@ -84,6 +90,12 @@ function aggregateAdsByCreative(rows: AdPerformanceMetric[], campaignNameMap: Re
       existing.clicks += row.clicks ?? 0;
       existing.engagements += row.engagements ?? 0;
       existing.landing_page_clicks += row.landing_page_clicks ?? 0;
+      existing.video_views += row.video_views ?? 0;
+      existing.video_completions += row.video_completions ?? 0;
+      existing.video_starts += row.video_starts ?? 0;
+      existing.video_first_quartile_completions += row.video_first_quartile_completions ?? 0;
+      existing.video_midpoint_completions += row.video_midpoint_completions ?? 0;
+      existing.video_third_quartile_completions += row.video_third_quartile_completions ?? 0;
       // Recalculate CTR from totals
       existing.ctr = existing.impressions > 0 ? existing.clicks / existing.impressions : 0;
     } else {
@@ -104,6 +116,12 @@ function aggregateAdsByCreative(rows: AdPerformanceMetric[], campaignNameMap: Re
         reference: row.reference ?? null,
         thumbnail_url: row.thumbnail_url ?? null,
         days_running: null, // filled below
+        video_views: row.video_views ?? 0,
+        video_completions: row.video_completions ?? 0,
+        video_starts: row.video_starts ?? 0,
+        video_first_quartile_completions: row.video_first_quartile_completions ?? 0,
+        video_midpoint_completions: row.video_midpoint_completions ?? 0,
+        video_third_quartile_completions: row.video_third_quartile_completions ?? 0,
       });
     }
   }
@@ -131,6 +149,7 @@ export default function TOFUPage() {
   const [selectedObjective, setSelectedObjective] = useState<Objective>('All');
   const [selectedAdKeys, setSelectedAdKeys] = useState<Set<string>>(new Set());
   const [selectedDate, setSelectedDate] = useState<string>('');
+  const [videoMetricMode, setVideoMetricMode] = useState<'video' | 'general'>('video');
 
   // Toggle a single ad selection
   function toggleAdSelection(key: string) {
@@ -177,9 +196,14 @@ export default function TOFUPage() {
   }, [data]);
 
   // ── Filter by objective (1 campaign per objective, no sub-filter needed) ─
+  // Also exclude known stale/old campaigns that should not appear on the dashboard
+  const EXCLUDED_CAMPAIGN_NAMES = ['video views - jan 30, 2026'];
   const filteredCampaigns = useMemo(() => {
-    if (selectedObjective === 'All') return campaignsWithObjective;
-    return campaignsWithObjective.filter(c => c.objective === selectedObjective);
+    let result = campaignsWithObjective.filter(
+      c => !EXCLUDED_CAMPAIGN_NAMES.includes(c.name.toLowerCase())
+    );
+    if (selectedObjective === 'All') return result;
+    return result.filter(c => c.objective === selectedObjective);
   }, [campaignsWithObjective, selectedObjective]);
 
   // ── Campaign name lookup map (for ad table) ─────────────────────────────
@@ -274,6 +298,47 @@ export default function TOFUPage() {
   const avgCPC = totalClicks ? totalSpend / totalClicks : 0;
   const avgCTR = wavg(filteredCampaigns, 'ctr', 'impressions');
   const avgEngRate = wavg(filteredCampaigns, 'engagement_rate', 'impressions');
+
+  // ── Video KPIs (sourced from ad_performance_metrics via CREATIVE pivot) ───
+  // LinkedIn's adAnalytics CAMPAIGN pivot does not return video fields.
+  // We sum them from aggregatedAssets (ad-level creative data) instead.
+  const totalVideoViews = aggregatedAssets.reduce((acc, r) => acc + (r.video_views ?? 0), 0);
+  const totalVideoCompletions = aggregatedAssets.reduce((acc, r) => acc + (r.video_completions ?? 0), 0);
+  const totalVideoQ1 = aggregatedAssets.reduce((acc, r) => acc + (r.video_first_quartile_completions ?? 0), 0);
+  const totalVideoQ2 = aggregatedAssets.reduce((acc, r) => acc + (r.video_midpoint_completions ?? 0), 0);
+  const totalVideoQ3 = aggregatedAssets.reduce((acc, r) => acc + (r.video_third_quartile_completions ?? 0), 0);
+  const totalVideoStarts = aggregatedAssets.reduce((acc, r) => acc + (r.video_starts ?? 0), 0);
+  const totalVideoSpend = aggregatedAssets.reduce((acc, r) => acc + (r.spend_eur ?? 0), 0);
+  const totalVideoImpressions = aggregatedAssets.reduce((acc, r) => acc + (r.impressions ?? 0), 0);
+  const avgViewRate = totalVideoImpressions > 0 ? totalVideoViews / totalVideoImpressions : 0;
+  const avgCPV = totalVideoViews > 0 ? totalVideoSpend / totalVideoViews : 0;
+  const videoCompletionRate = totalVideoViews > 0 ? totalVideoCompletions / totalVideoViews : 0;
+  const isVideoObjective = selectedObjective === 'Video Views';
+
+  // ── Per-campaign video totals (aggregated from ad_performance_metrics) ────
+  // Used to populate per-row video metrics in the campaign table
+  const campaignVideoTotals = useMemo(() => {
+    const map = new Map<string, {
+      video_views: number; video_starts: number; video_completions: number;
+      video_q1: number; video_q2: number; video_q3: number;
+      spend: number; impressions: number;
+    }>();
+    for (const row of filteredAdRows) {
+      const id = row.campaign_id;
+      const prev = map.get(id) ?? { video_views: 0, video_starts: 0, video_completions: 0, video_q1: 0, video_q2: 0, video_q3: 0, spend: 0, impressions: 0 };
+      map.set(id, {
+        video_views: prev.video_views + (row.video_views ?? 0),
+        video_starts: prev.video_starts + (row.video_starts ?? 0),
+        video_completions: prev.video_completions + (row.video_completions ?? 0),
+        video_q1: prev.video_q1 + (row.video_first_quartile_completions ?? 0),
+        video_q2: prev.video_q2 + (row.video_midpoint_completions ?? 0),
+        video_q3: prev.video_q3 + (row.video_third_quartile_completions ?? 0),
+        spend: prev.spend + (row.spend_eur ?? 0),
+        impressions: prev.impressions + (row.impressions ?? 0),
+      });
+    }
+    return map;
+  }, [filteredAdRows]);
 
   // ── Loading / Error states ──────────────────────────────────────────────
   if (isLoading) {
@@ -404,12 +469,20 @@ export default function TOFUPage() {
             <MetricCard label="CPM" value={formatEUR(avgCPM)} />
             <MetricCard label="CTR" value={formatPercent(avgCTR)} />
           </div>
-          <div className="grid-4" style={{ marginBottom: '1.5rem' }}>
+          <div className="grid-4" style={{ marginBottom: isVideoObjective ? '1rem' : '1.5rem' }}>
             <MetricCard label="Engagement Rate" value={formatPercent(avgEngRate)} />
             <MetricCard label="Ads" value={formatNumber(totalAds)} />
             <MetricCard label="Clicks" value={formatNumber(totalClicks)} />
             <MetricCard label="CPC" value={formatEUR(avgCPC)} />
           </div>
+          {isVideoObjective && (
+            <div className="grid-4" style={{ marginBottom: '1.5rem' }}>
+              <MetricCard label="Video Views" value={formatNumber(totalVideoViews)} />
+              <MetricCard label="View Rate" value={formatPercent(avgViewRate)} />
+              <MetricCard label="CPV" value={formatEUR(avgCPV)} />
+              <MetricCard label="Completion Rate" value={formatPercent(videoCompletionRate)} />
+            </div>
+          )}
 
           {/* Campaign Details */}
           <SectionHeader>Campaign Details</SectionHeader>
@@ -419,8 +492,12 @@ export default function TOFUPage() {
                 <thead>
                   <tr>
                     <th>Campaign Name</th><th>Objective</th><th>Status</th><th>Ads</th>
-                    <th title="Total Spend in Euros">Spent</th><th>Impressions</th><th title="Total Unique Reach">Reach</th><th>Clicks</th>
-                    <th title="Click-Through Rate">CTR</th><th title="Cost Per Mille (Cost Per Thousand Impressions)">CPM</th><th title="Cost Per Click">CPC</th><th>Leads</th><th title="Number of days the campaign has been or was running">Days</th>
+                    <th title="Total Spend in Euros">Spent</th><th>Impressions</th>
+                    {isVideoObjective ? (
+                      <><th title="Total Video Views">Video Views</th><th title="Video View Rate (Views / Impressions)">VR%</th><th title="Cost Per View">CPV</th><th title="Video Completion Rate">CR%</th><th title="Number of days the campaign has been or was running">Days</th></>
+                    ) : (
+                      <><th title="Total Unique Reach">Reach</th><th>Clicks</th><th title="Click-Through Rate">CTR</th><th title="Cost Per Mille (Cost Per Thousand Impressions)">CPM</th><th title="Cost Per Click">CPC</th><th>Leads</th><th title="Number of days the campaign has been or was running">Days</th></>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -431,6 +508,31 @@ export default function TOFUPage() {
                     const clicks = m?.clicks ?? 0;
                     const cpm = impressions ? (spend / impressions) * 1000 : 0;
                     const cpc = clicks ? spend / clicks : 0;
+                    const days = formatDays(computeDays(m?.date_range_start, c.status === 'ACTIVE' ? undefined : m?.date_range_end));
+
+                    if (isVideoObjective) {
+                      const v = campaignVideoTotals.get(c.id) ?? { video_views: 0, video_starts: 0, video_completions: 0, video_q1: 0, video_q2: 0, video_q3: 0, spend: 0, impressions: 0 };
+                      const vImpr = v.impressions || impressions;
+                      const vViewRate = vImpr > 0 ? v.video_views / vImpr : 0;
+                      const vCPV = v.video_views > 0 ? v.spend / v.video_views : 0;
+                      const vComplRate = v.video_views > 0 ? v.video_completions / v.video_views : 0;
+                      return (
+                        <tr key={c.id}>
+                          <td>{c.name}</td>
+                          <td><span className={`objective-tag objective-${c.objective.toLowerCase().replace(' ', '-')}`}>{c.objective}</span></td>
+                          <td><Badge status={c.status} /></td>
+                          <td>{c.ad_count}</td>
+                          <td>{formatEUR(v.spend || spend)}</td>
+                          <td>{formatNumber(vImpr)}</td>
+                          <td className="td-nowrap td-num">{formatNumber(v.video_views)}</td>
+                          <td className="td-nowrap td-num">{formatPercent(vViewRate)}</td>
+                          <td className="td-nowrap td-num">{formatEUR(vCPV)}</td>
+                          <td className="td-nowrap td-num">{formatPercent(vComplRate)}</td>
+                          <td className="td-nowrap td-num">{days}</td>
+                        </tr>
+                      );
+                    }
+
                     return (
                       <tr key={c.id}>
                         <td>{c.name}</td>
@@ -449,7 +551,7 @@ export default function TOFUPage() {
                         <td>{formatEUR(cpm)}</td>
                         <td>{formatEUR(cpc)}</td>
                         <td>{formatNumber(m?.leads ?? 0)}</td>
-                        <td className="td-nowrap td-num">{formatDays(computeDays(m?.date_range_start, c.status === 'ACTIVE' ? undefined : m?.date_range_end))}</td>
+                        <td className="td-nowrap td-num">{days}</td>
                       </tr>
                     );
                   })}
@@ -458,30 +560,120 @@ export default function TOFUPage() {
             </div>
           </ChartContainer>
 
-          {/* Charts */}
-          <div className="grid-2">
-            <ChartContainer title="Impressions by Campaign">
-              <BarChart
-                labels={filteredCampaigns.map(c => c.objective)}
-                values={filteredCampaigns.map(c => c.latest_metric?.impressions ?? 0)}
-                colors={filteredCampaigns.map((_, i) => i === 0 ? '#062E62' : '#0050FF')}
-                height={280}
-              />
-            </ChartContainer>
-            <ChartContainer title="CTR by Campaign">
-              <BarChart
-                labels={filteredCampaigns.map(c => c.objective)}
-                values={filteredCampaigns.map(c => parseFloat(((c.latest_metric?.ctr ?? 0) * 100).toFixed(2)))}
-                colors={filteredCampaigns.map((_, i) => i === 0 ? '#062E62' : '#0050FF')}
-                height={280}
-                textFormat={v => `${v.toFixed(2)}%`}
-                yAxisRange={[0, Math.max(...filteredCampaigns.map(c => (c.latest_metric?.ctr ?? 0) * 100), 0.01) * 1.4]}
-              />
-            </ChartContainer>
-          </div>
+          {/* ── Impressions & CTR charts ── */}
+          {filteredCampaigns.length > 0 && (() => {
+            let chartLabels: string[];
+            let chartColors: string[];
+            let impressionVals: number[];
+            let ctrVals: number[];
+            let chartTitle1: string;
+            let chartTitle2: string;
+
+            if (selectedObjective === 'All') {
+              // ── All tab: group by objective type ──────────────────────────
+              const OBJECTIVE_COLORS: Record<string, string> = {
+                'Awareness':   '#062E62',
+                'Engagement':  '#0050FF',
+                'Video Views': '#3B82F6',
+              };
+              type ObjKey = 'Awareness' | 'Engagement' | 'Video Views';
+              const objKeys: ObjKey[] = ['Awareness', 'Engagement', 'Video Views'];
+
+              const grouped = objKeys.reduce<Record<ObjKey, { impressions: number; clicks: number }>>((acc, k) => {
+                acc[k] = { impressions: 0, clicks: 0 };
+                return acc;
+              }, {} as any);
+
+              filteredCampaigns.forEach(c => {
+                const obj = c.objective as ObjKey;
+                if (!grouped[obj]) return;
+                grouped[obj].impressions += c.latest_metric?.impressions ?? 0;
+                grouped[obj].clicks     += c.latest_metric?.clicks ?? 0;
+              });
+
+              const activeKeys = objKeys.filter(k => grouped[k].impressions > 0 || grouped[k].clicks > 0);
+              chartLabels    = activeKeys;
+              chartColors    = activeKeys.map(k => OBJECTIVE_COLORS[k]);
+              impressionVals = activeKeys.map(k => grouped[k].impressions);
+              ctrVals        = activeKeys.map(k => {
+                const { clicks, impressions } = grouped[k];
+                return impressions > 0 ? parseFloat(((clicks / impressions) * 100).toFixed(3)) : 0;
+              });
+              chartTitle1 = 'Impressions by Objective';
+              chartTitle2 = 'CTR by Objective';
+            } else {
+              // ── Specific tab: one bar per campaign ────────────────────────
+              const shortLabel = (name: string) => {
+                const parts = name.split('_');
+                const meaningful = parts.filter(p => !/^\d{4}$/.test(p) && !/^\d{2}$/.test(p) && !p.includes('/'));
+                const label = meaningful.join(' ').trim() || name;
+                return label.length > 28 ? label.slice(0, 26) + '…' : label;
+              };
+
+              chartLabels    = filteredCampaigns.map(c => shortLabel(c.name));
+              chartColors    = filteredCampaigns.map(() => '#0050FF');
+              impressionVals = filteredCampaigns.map(c => c.latest_metric?.impressions ?? 0);
+              ctrVals        = filteredCampaigns.map(c => {
+                const clicks      = c.latest_metric?.clicks ?? 0;
+                const impressions = c.latest_metric?.impressions ?? 0;
+                return impressions > 0 ? parseFloat(((clicks / impressions) * 100).toFixed(3)) : 0;
+              });
+              chartTitle1 = `Impressions — ${selectedObjective}`;
+              chartTitle2 = `CTR — ${selectedObjective}`;
+            }
+
+            return (
+              <div className="grid-2" style={{ marginBottom: '1.25rem' }}>
+                <ChartContainer title={chartTitle1}>
+                  <BarChart
+                    labels={chartLabels}
+                    values={impressionVals}
+                    colors={chartColors}
+                    height={280}
+                    textFormat={v => formatNumber(v)}
+                  />
+                </ChartContainer>
+                <ChartContainer title={chartTitle2}>
+                  <BarChart
+                    labels={chartLabels}
+                    values={ctrVals}
+                    colors={chartColors}
+                    height={280}
+                    textFormat={v => `${v}%`}
+                  />
+                </ChartContainer>
+              </div>
+            );
+          })()}
 
           {/* ── Ad Performance by Asset (Aggregated) ── */}
-          <SectionHeader>Ad Performance by Asset</SectionHeader>
+          {isVideoObjective ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', margin: '2rem 0 1rem', paddingBottom: '0.5rem', borderBottom: '2px solid var(--color-navy)' }}>
+              <span className="section-header" style={{ margin: 0, border: 'none', paddingBottom: 0 }}>Ad Performance by Asset</span>
+              <div className="filter-group" style={{ margin: 0 }}>
+                <span className="filter-label" style={{ fontSize: 11, fontWeight: 700 }}>VIEW METRICS:</span>
+                <div className="filter-pills">
+                  <button
+                    className={`filter-pill ${videoMetricMode === 'general' ? 'active' : ''}`}
+                    onClick={() => setVideoMetricMode('general')}
+                    style={{ fontSize: 11, padding: '0.2rem 0.65rem' }}
+                  >
+                    General
+                  </button>
+                  <button
+                    className={`filter-pill ${videoMetricMode === 'video' ? 'active' : ''}`}
+                    onClick={() => setVideoMetricMode('video')}
+                    style={{ fontSize: 11, padding: '0.2rem 0.65rem' }}
+                  >
+                   Video Specific
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <SectionHeader>Ad Performance by Asset</SectionHeader>
+          )}
+
           <div style={{ marginBottom: '0.5rem' }}>
             <p style={{ fontSize: 12, color: '#5A6577' }}>
               Aggregated lifetime metrics per ad creative, mapped to the LinkedIn Asset ID.
@@ -493,6 +685,15 @@ export default function TOFUPage() {
           <ChartContainer>
             <div className="table-wrapper">
               <table className="ad-asset-table">
+                <colgroup>
+                  <col style={{ width: 36 }} />
+                  <col style={{ width: 64 }} />
+                  <col style={{ width: 108 }} />
+                  <col style={{ width: 160 }} />
+                  <col style={{ width: 62 }} />
+                  <col style={{ width: 68 }} />
+                  <col style={{ width: 68 }} />
+                </colgroup>
                 <thead>
                   <tr>
                     <th style={{ width: 36, textAlign: 'center' }}>
@@ -510,18 +711,14 @@ export default function TOFUPage() {
                       />
                     </th>
                     <th className="th-thumb">Preview</th>
-                    <th className="hide-md" onClick={() => handleSort('creative_id')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: 88 }}>
+                    <th className="hide-md" onClick={() => handleSort('creative_id')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
                       Asset ID{renderSortIndicator('creative_id')}
                     </th>
-                    <th onClick={() => handleSort('creative_name')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: '14%' }}>
+                    <th onClick={() => handleSort('creative_name')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
                       Ad Name{renderSortIndicator('creative_name')}
                     </th>
-                    {showCampaignCol && (
-                      <th className="hide-lg" onClick={() => handleSort('campaign_name')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: '10%' }}>
-                        Campaign{renderSortIndicator('campaign_name')}
-                      </th>
-                    )}
-                    <th className="hide-sm" onClick={() => handleSort('status')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: 68 }}>
+
+                    <th className="hide-sm" onClick={() => handleSort('status')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
                       Status{renderSortIndicator('status')}
                     </th>
                     <th className="th-num" onClick={() => handleSort('spend_eur')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Spend in Euros">
@@ -530,28 +727,82 @@ export default function TOFUPage() {
                     <th className="th-num" onClick={() => handleSort('impressions')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Delivered Impressions">
                       Impr{renderSortIndicator('impressions')}
                     </th>
-                    <th className="th-num hide-lg" onClick={() => handleSort('reach')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Unique Reach">
-                      Reach{renderSortIndicator('reach')}
-                    </th>
-                    <th className="th-num" onClick={() => handleSort('clicks')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Clicks">
-                      Clicks{renderSortIndicator('clicks')}
-                    </th>
-                    <th className="th-num" onClick={() => handleSort('ctr')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Click-Through Rate">
-                      CTR{renderSortIndicator('ctr')}
-                    </th>
-                    <th className="th-num" onClick={() => handleSort('cpm')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Cost Per Mille (Cost Per Thousand Impressions)">
-                      CPM{renderSortIndicator('cpm')}
-                    </th>
-                    <th className="th-num-xs" onClick={() => handleSort('cpc')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Cost Per Click">
-                      CPC{renderSortIndicatorAd('cpc')}
-                    </th>
-                    <th className="th-num-xs hide-md" onClick={() => handleSort('engagements')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Engagements">
-                      Eng.{renderSortIndicatorAd('engagements')}
-                    </th>
-                    <th className="th-num-xs hide-lg" onClick={() => handleSort('landing_page_clicks')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Landing Page Clicks">
-                      LPC{renderSortIndicatorAd('landing_page_clicks')}
-                    </th>
-                    <th className="th-num-xs" onClick={() => handleSort('days_running')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Number of days the ad has been or was running">
+
+                    {isVideoObjective ? (
+                      videoMetricMode === 'video' ? (
+                        <>
+                          <th className="th-num-xs metric-swap-cell" onClick={() => handleSort('video_views')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Video Views">
+                            Views{renderSortIndicatorAd('video_views')}
+                          </th>
+                          <th className="th-num-xs metric-swap-cell" style={{ whiteSpace: 'nowrap' }} title="View Rate = Video Views / Impressions">VR%</th>
+                          <th className="th-num-xs hide-md metric-swap-cell" onClick={() => handleSort('video_starts')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Video Starts">
+                            VS{renderSortIndicatorAd('video_starts')}
+                          </th>
+                          <th className="th-num-xs hide-md metric-swap-cell" onClick={() => handleSort('video_first_quartile_completions')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="25% of video watched">
+                            25%{renderSortIndicatorAd('video_first_quartile_completions')}
+                          </th>
+                          <th className="th-num-xs hide-md metric-swap-cell" onClick={() => handleSort('video_midpoint_completions')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="50% of video watched">
+                            50%{renderSortIndicatorAd('video_midpoint_completions')}
+                          </th>
+                          <th className="th-num-xs hide-md metric-swap-cell" onClick={() => handleSort('video_third_quartile_completions')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="75% of video watched">
+                            75%{renderSortIndicatorAd('video_third_quartile_completions')}
+                          </th>
+                          <th className="th-num-xs metric-swap-cell" onClick={() => handleSort('video_completions')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Completion Rate (100% watched)">
+                            CR%{renderSortIndicatorAd('video_completions')}
+                          </th>
+                          <th className="th-num-xs metric-swap-cell" style={{ whiteSpace: 'nowrap' }} title="Cost Per View">CPV</th>
+                        </>
+                      ) : (
+                        <>
+                          <th className="th-num-sm hide-lg metric-swap-cell" onClick={() => handleSort('reach')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Unique Reach">
+                            Reach{renderSortIndicator('reach')}
+                          </th>
+                          <th className="th-num-sm metric-swap-cell" onClick={() => handleSort('clicks')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Clicks">
+                            Clicks{renderSortIndicator('clicks')}
+                          </th>
+                          <th className="th-num metric-swap-cell" onClick={() => handleSort('ctr')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Click-Through Rate">
+                            CTR{renderSortIndicator('ctr')}
+                          </th>
+                          <th className="th-num metric-swap-cell" onClick={() => handleSort('cpm')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Cost Per Mille">
+                            CPM{renderSortIndicator('cpm')}
+                          </th>
+                          <th className="th-num-xs metric-swap-cell" onClick={() => handleSort('cpc')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Cost Per Click">
+                            CPC{renderSortIndicatorAd('cpc')}
+                          </th>
+                          <th className="th-num-sm hide-md metric-swap-cell" onClick={() => handleSort('engagements')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Engagements">
+                            Eng.{renderSortIndicatorAd('engagements')}
+                          </th>
+                          <th className="th-num-sm hide-lg metric-swap-cell" onClick={() => handleSort('landing_page_clicks')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Landing Page Clicks">
+                            LPC{renderSortIndicatorAd('landing_page_clicks')}
+                          </th>
+                        </>
+                      )
+                    ) : (
+                      <>
+                        <th className="th-num hide-lg" onClick={() => handleSort('reach')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Unique Reach">
+                          Reach{renderSortIndicator('reach')}
+                        </th>
+                        <th className="th-num-sm" onClick={() => handleSort('clicks')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Clicks">
+                          Clicks{renderSortIndicator('clicks')}
+                        </th>
+                        <th className="th-num" onClick={() => handleSort('ctr')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Click-Through Rate">
+                          CTR{renderSortIndicator('ctr')}
+                        </th>
+                        <th className="th-num" onClick={() => handleSort('cpm')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Cost Per Mille">
+                          CPM{renderSortIndicator('cpm')}
+                        </th>
+                        <th className="th-num-xs" onClick={() => handleSort('cpc')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Cost Per Click">
+                          CPC{renderSortIndicatorAd('cpc')}
+                        </th>
+                        <th className="th-num-xs hide-md" onClick={() => handleSort('engagements')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Engagements">
+                          Eng.{renderSortIndicatorAd('engagements')}
+                        </th>
+                        <th className="th-num-xs hide-lg" onClick={() => handleSort('landing_page_clicks')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Landing Page Clicks">
+                          LPC{renderSortIndicatorAd('landing_page_clicks')}
+                        </th>
+                      </>
+                    )}
+                    <th className="th-num-xs" onClick={() => handleSort('days_running')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Days running">
                       Days{renderSortIndicatorAd('days_running')}
                     </th>
                   </tr>
@@ -586,7 +837,7 @@ export default function TOFUPage() {
                         <td className="td-asset-id hide-md">
                           <code className="linkedin-id" title={row.creative_id}>{numericId}</code>
                         </td>
-                        <td>
+                        <td className="td-ad-name">
                           {row.creative_url ? (
                             <a
                               href={row.creative_url}
@@ -594,37 +845,66 @@ export default function TOFUPage() {
                               rel="noopener noreferrer"
                               className="creative-link"
                               title={`Preview ad on LinkedIn: ${row.creative_name}`}
-                              style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', textDecoration: 'none', color: 'inherit' }}
+                              style={{ textDecoration: 'none', color: 'inherit', display: 'inline' }}
                             >
-                              <div className="td-truncate-inner" style={{ color: 'var(--color-blue)', fontWeight: 500 }}>{row.creative_name}</div>
-                              <span style={{ fontSize: '11px', color: 'var(--color-blue)' }}>↗</span>
+                              <span className="td-ad-name-inner" style={{ color: 'var(--color-blue)', fontWeight: 500 }}>{row.creative_name}</span>
+                              <span style={{ fontSize: '11px', color: 'var(--color-blue)', marginLeft: '3px' }}>↗</span>
                             </a>
                           ) : (
-                            <div className="td-truncate-inner" title={row.creative_name}>{row.creative_name}</div>
+                            <div className="td-ad-name-inner" title={row.creative_name}>{row.creative_name}</div>
                           )}
                         </td>
-                        {showCampaignCol && (
-                          <td className="hide-lg">
-                            <div className="td-truncate-inner campaign-name" title={row.campaign_name}>{row.campaign_name}</div>
-                          </td>
-                        )}
+
                         <td className="td-nowrap hide-sm">{row.status ? <Badge status={row.status === 'ACTIVE' ? 'ACTIVE' : row.status === 'COMPLETED' ? 'COMPLETED' : 'PAUSED'} /> : <span className="td-dash">—</span>}</td>
                         <td className="td-nowrap td-num">{formatEUR(row.spend_eur)}</td>
                         <td className="td-nowrap td-num">{formatNumber(row.impressions)}</td>
-                        <td className="td-nowrap td-num hide-lg">{formatNumber(row.reach)}</td>
-                        <td className="td-nowrap td-num">{formatNumber(row.clicks)}</td>
-                        <td className="td-nowrap td-num">{formatPercent(row.ctr, 3)}</td>
-                        <td className="td-nowrap td-num">{formatEUR(cpm)}</td>
-                        <td className="td-nowrap td-num">{formatEUR(cpc)}</td>
-                        <td className="td-nowrap td-num hide-md">{formatNumber(row.engagements)}</td>
-                        <td className="td-nowrap td-num hide-lg">{formatNumber(row.landing_page_clicks)}</td>
+
+                        {isVideoObjective ? (
+                          videoMetricMode === 'video' ? (() => {
+                            const vViews = row.video_views ?? 0;
+                            const vStarts = row.video_starts ?? 0;
+                            const vQ1 = row.video_first_quartile_completions ?? 0;
+                            const vQ2 = row.video_midpoint_completions ?? 0;
+                            const vQ3 = row.video_third_quartile_completions ?? 0;
+                            const vCompl = row.video_completions ?? 0;
+                            const vViewRate = row.impressions > 0 ? vViews / row.impressions : 0;
+                            const vComplRate = vViews > 0 ? vCompl / vViews : 0;
+                            const vCPV = vViews > 0 ? row.spend_eur / vViews : 0;
+                            return (<>
+                              <td className="td-nowrap td-num metric-swap-cell">{formatNumber(vViews)}</td>
+                              <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vViewRate)}</td>
+                              <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vStarts)}</td>
+                              <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ1)}</td>
+                              <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ2)}</td>
+                              <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ3)}</td>
+                              <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vComplRate)}</td>
+                              <td className="td-nowrap td-num metric-swap-cell">{formatEUR(vCPV)}</td>
+                            </>);
+                          })() : (<>
+                            <td className="td-nowrap td-num hide-lg metric-swap-cell">{formatNumber(row.reach)}</td>
+                            <td className="td-nowrap td-num metric-swap-cell">{formatNumber(row.clicks)}</td>
+                            <td className="td-nowrap td-num metric-swap-cell">{formatPercent(row.ctr, 3)}</td>
+                            <td className="td-nowrap td-num metric-swap-cell">{formatEUR(cpm)}</td>
+                            <td className="td-nowrap td-num metric-swap-cell">{formatEUR(cpc)}</td>
+                            <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(row.engagements)}</td>
+                            <td className="td-nowrap td-num hide-lg metric-swap-cell">{formatNumber(row.landing_page_clicks)}</td>
+                          </>)
+                        ) : (<>
+                          <td className="td-nowrap td-num hide-lg">{formatNumber(row.reach)}</td>
+                          <td className="td-nowrap td-num">{formatNumber(row.clicks)}</td>
+                          <td className="td-nowrap td-num">{formatPercent(row.ctr, 3)}</td>
+                          <td className="td-nowrap td-num">{formatEUR(cpm)}</td>
+                          <td className="td-nowrap td-num">{formatEUR(cpc)}</td>
+                          <td className="td-nowrap td-num hide-md">{formatNumber(row.engagements)}</td>
+                          <td className="td-nowrap td-num hide-lg">{formatNumber(row.landing_page_clicks)}</td>
+                        </>)}
                         <td className="td-nowrap td-num">{formatDays(row.days_running)}</td>
                       </tr>
                     );
                   })}
                   {sortedAssets.length === 0 && (
                     <tr>
-                      <td colSpan={showCampaignCol ? 15 : 14} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>
+                      <td colSpan={isVideoObjective && videoMetricMode === 'video' ? 16 : 15} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>
                         No ad data available for the current selection.
                       </td>
                     </tr>
@@ -635,35 +915,96 @@ export default function TOFUPage() {
           </ChartContainer>
 
           {/* ── Daily Ad Performance (Raw) ── */}
-          <div className="section-header-row">
+          <div className="section-header-row" style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'flex-end', justifyContent: 'space-between' }}>
             <span className="section-header" style={{ margin: 0, border: 'none', paddingBottom: 0 }}>Daily Ad Performance</span>
-            <DatePickerCalendar
-              availableDates={availableDates}
-              selectedDate={selectedDate}
-              onSelect={setSelectedDate}
-              onClear={() => setSelectedDate('')}
-            />
+            
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', flexWrap: 'wrap' }}>
+              {isVideoObjective && (
+                <div className="filter-group" style={{ margin: 0 }}>
+                  <span className="filter-label" style={{ fontSize: 11, fontWeight: 700 }}>VIEW METRICS:</span>
+                  <div className="filter-pills">
+                    <button
+                      className={`filter-pill ${videoMetricMode === 'general' ? 'active' : ''}`}
+                      onClick={() => setVideoMetricMode('general')}
+                      style={{ fontSize: 11, padding: '0.2rem 0.65rem' }}
+                    >
+                      General
+                    </button>
+                    <button
+                      className={`filter-pill ${videoMetricMode === 'video' ? 'active' : ''}`}
+                      onClick={() => setVideoMetricMode('video')}
+                      style={{ fontSize: 11, padding: '0.2rem 0.65rem' }}
+                    >
+                     Video Specific
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <DatePickerCalendar
+                availableDates={availableDates}
+                selectedDate={selectedDate}
+                onSelect={setSelectedDate}
+                onClear={() => setSelectedDate('')}
+              />
+            </div>
           </div>
 
           <ChartContainer>
             <div className="table-wrapper">
               <table className="ad-asset-table">
+                <colgroup>
+                  <col style={{ width: 78 }} />
+                  <col style={{ width: 64 }} />
+                  <col style={{ width: 108 }} />
+                  <col style={{ width: 160 }} />
+                  <col style={{ width: 62 }} />
+                  <col style={{ width: 68 }} />
+                  <col style={{ width: 68 }} />
+                </colgroup>
                 <thead>
                   <tr>
                     <th style={{ width: 78 }}>Date</th>
                     <th className="th-thumb">Preview</th>
                     <th className="hide-md" style={{ width: 88 }}>Asset ID</th>
-                    <th style={{ width: '14%' }}>Ad Name</th>
-                    <th className="hide-sm" style={{ width: 68 }}>Status</th>
+                    <th>Ad Name</th>
+                    <th className="hide-sm">Status</th>
                     <th className="th-num" title="Total Spend in Euros">Spend</th>
                     <th className="th-num" title="Total Delivered Impressions">Impr.</th>
-                    <th className="th-num hide-lg" title="Total Unique Reach">Reach</th>
-                    <th className="th-num" title="Total Clicks">Clicks</th>
-                    <th className="th-num" title="Click-Through Rate">CTR</th>
-                    <th className="th-num" title="Cost Per Mille (Cost Per Thousand Impressions)">CPM</th>
-                    <th className="th-num" title="Cost Per Click">CPC</th>
-                    <th className="th-num hide-md" title="Total Engagements">Eng.</th>
-                    <th className="th-num hide-lg" title="Landing Page Clicks">LPC</th>
+                    {isVideoObjective ? (
+                      videoMetricMode === 'video' ? (
+                        <>
+                          <th className="th-num-xs metric-swap-cell" title="Total Video Views">Views</th>
+                          <th className="th-num-xs metric-swap-cell" title="View Rate = Video Views / Impressions">VR%</th>
+                          <th className="th-num-xs hide-md metric-swap-cell" title="Video Starts">VS</th>
+                          <th className="th-num-xs hide-md metric-swap-cell" title="25% of video watched">25%</th>
+                          <th className="th-num-xs hide-md metric-swap-cell" title="50% of video watched">50%</th>
+                          <th className="th-num-xs hide-md metric-swap-cell" title="75% of video watched">75%</th>
+                          <th className="th-num-xs metric-swap-cell" title="Completion Rate (100% watched)">CR%</th>
+                          <th className="th-num-xs metric-swap-cell" title="Cost Per View">CPV</th>
+                        </>
+                      ) : (
+                        <>
+                          <th className="th-num hide-lg metric-swap-cell" title="Total Unique Reach">Reach</th>
+                          <th className="th-num-sm metric-swap-cell" title="Total Clicks">Clicks</th>
+                          <th className="th-num metric-swap-cell" title="Click-Through Rate">CTR</th>
+                          <th className="th-num metric-swap-cell" title="Cost Per Mille (Cost Per Thousand Impressions)">CPM</th>
+                          <th className="th-num-xs metric-swap-cell" title="Cost Per Click">CPC</th>
+                          <th className="th-num-xs hide-md metric-swap-cell" title="Total Engagements">Eng.</th>
+                          <th className="th-num-xs hide-lg metric-swap-cell" title="Landing Page Clicks">LPC</th>
+                        </>
+                      )
+                    ) : (
+                      <>
+                        <th className="th-num hide-lg" title="Total Unique Reach">Reach</th>
+                        <th className="th-num-sm" title="Total Clicks">Clicks</th>
+                        <th className="th-num" title="Click-Through Rate">CTR</th>
+                        <th className="th-num" title="Cost Per Mille (Cost Per Thousand Impressions)">CPM</th>
+                        <th className="th-num-xs" title="Cost Per Click">CPC</th>
+                        <th className="th-num-xs hide-md" title="Total Engagements">Eng.</th>
+                        <th className="th-num-xs hide-lg" title="Landing Page Clicks">LPC</th>
+                      </>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -687,7 +1028,7 @@ export default function TOFUPage() {
                         <td className="td-asset-id hide-md">
                           <code className="linkedin-id" title={row.creative_id}>{numericId}</code>
                         </td>
-                        <td>
+                        <td className="td-ad-name">
                           {row.creative_url ? (
                             <a
                               href={row.creative_url}
@@ -695,31 +1036,63 @@ export default function TOFUPage() {
                               rel="noopener noreferrer"
                               className="creative-link"
                               title={`Preview ad on LinkedIn: ${row.creative_name}`}
-                              style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', textDecoration: 'none', color: 'inherit' }}
+                              style={{ textDecoration: 'none', color: 'inherit', display: 'inline' }}
                             >
-                              <div className="td-truncate-inner" style={{ color: 'var(--color-blue)', fontWeight: 500 }}>{row.creative_name}</div>
-                              <span style={{ fontSize: '11px', color: 'var(--color-blue)' }}>↗</span>
+                              <span className="td-ad-name-inner" style={{ color: 'var(--color-blue)', fontWeight: 500 }}>{row.creative_name}</span>
+                              <span style={{ fontSize: '11px', color: 'var(--color-blue)', marginLeft: '3px' }}>↗</span>
                             </a>
                           ) : (
-                            <div className="td-truncate-inner" title={row.creative_name}>{row.creative_name}</div>
+                            <div className="td-ad-name-inner" title={row.creative_name}>{row.creative_name}</div>
                           )}
                         </td>
                         <td className="td-nowrap hide-sm">{row.status ? <Badge status={row.status === 'ACTIVE' ? 'ACTIVE' : row.status === 'COMPLETED' ? 'COMPLETED' : 'PAUSED'} /> : <span className="td-dash">—</span>}</td>
                         <td className="td-nowrap td-num">{formatEUR(spend)}</td>
                         <td className="td-nowrap td-num">{formatNumber(impressions)}</td>
-                        <td className="td-nowrap td-num hide-lg">{formatNumber(row.reach ?? 0)}</td>
-                        <td className="td-nowrap td-num">{formatNumber(clicks)}</td>
-                        <td className="td-nowrap td-num">{formatPercent(row.ctr ?? 0, 3)}</td>
-                        <td className="td-nowrap td-num">{formatEUR(cpm)}</td>
-                        <td className="td-nowrap td-num">{formatEUR(cpc)}</td>
-                        <td className="td-nowrap td-num hide-md">{formatNumber(row.engagements ?? 0)}</td>
-                        <td className="td-nowrap td-num hide-lg">{formatNumber(row.landing_page_clicks ?? 0)}</td>
+                        {isVideoObjective ? (
+                          videoMetricMode === 'video' ? (() => {
+                            const vViews = row.video_views ?? 0;
+                            const vStarts = row.video_starts ?? 0;
+                            const vQ1 = row.video_first_quartile_completions ?? 0;
+                            const vQ2 = row.video_midpoint_completions ?? 0;
+                            const vQ3 = row.video_third_quartile_completions ?? 0;
+                            const vCompl = row.video_completions ?? 0;
+                            const vViewRate = impressions > 0 ? vViews / impressions : 0;
+                            const vComplRate = vViews > 0 ? vCompl / vViews : 0;
+                            const vCPV = vViews > 0 ? spend / vViews : 0;
+                            return (<>
+                              <td className="td-nowrap td-num metric-swap-cell">{formatNumber(vViews)}</td>
+                              <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vViewRate)}</td>
+                              <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vStarts)}</td>
+                              <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ1)}</td>
+                              <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ2)}</td>
+                              <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ3)}</td>
+                              <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vComplRate)}</td>
+                              <td className="td-nowrap td-num metric-swap-cell">{formatEUR(vCPV)}</td>
+                            </>);
+                          })() : (<>
+                            <td className="td-nowrap td-num hide-lg metric-swap-cell">{formatNumber(row.reach ?? 0)}</td>
+                            <td className="td-nowrap td-num metric-swap-cell">{formatNumber(clicks)}</td>
+                            <td className="td-nowrap td-num metric-swap-cell">{formatPercent(row.ctr ?? 0, 3)}</td>
+                            <td className="td-nowrap td-num metric-swap-cell">{formatEUR(cpm)}</td>
+                            <td className="td-nowrap td-num metric-swap-cell">{formatEUR(cpc)}</td>
+                            <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(row.engagements ?? 0)}</td>
+                            <td className="td-nowrap td-num hide-lg metric-swap-cell">{formatNumber(row.landing_page_clicks ?? 0)}</td>
+                          </>)
+                        ) : (<>
+                          <td className="td-nowrap td-num hide-lg">{formatNumber(row.reach ?? 0)}</td>
+                          <td className="td-nowrap td-num">{formatNumber(clicks)}</td>
+                          <td className="td-nowrap td-num">{formatPercent(row.ctr ?? 0, 3)}</td>
+                          <td className="td-nowrap td-num">{formatEUR(cpm)}</td>
+                          <td className="td-nowrap td-num">{formatEUR(cpc)}</td>
+                          <td className="td-nowrap td-num hide-md">{formatNumber(row.engagements ?? 0)}</td>
+                          <td className="td-nowrap td-num hide-lg">{formatNumber(row.landing_page_clicks ?? 0)}</td>
+                        </>)}
                       </tr>
                     );
                   })}
                   {dailyAdRows.length === 0 && (
                     <tr>
-                      <td colSpan={14} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>
+                      <td colSpan={isVideoObjective && videoMetricMode === 'video' ? 15 : 14} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>
                         No daily ad performance rows for the current selection.
                       </td>
                     </tr>

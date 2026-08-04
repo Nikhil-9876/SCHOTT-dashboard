@@ -47,6 +47,16 @@ function getCampaignNameIncludes() {
     .filter(Boolean);
 }
 
+// Explicit blocklist — campaigns whose names contain any of these terms are always skipped
+function getCampaignNameExcludes() {
+  const configuredFilter = Deno.env.get('LINKEDIN_CAMPAIGN_NAME_EXCLUDES')?.trim();
+  if (!configuredFilter) return [];
+  return configuredFilter
+    .split(',')
+    .map((term) => term.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 function campaignMatchesNameFilter(campaignName: string, includeTerms: string[]) {
   if (includeTerms.length === 0) return true;
 
@@ -295,6 +305,17 @@ const BASE_CAMPAIGN_ANALYTICS_FIELDS = [
   'externalWebsiteConversions',
 ];
 
+// Video fields are ONLY available on the CREATIVE pivot, not CAMPAIGN pivot.
+// These are kept here as documentation but NOT used in buildAnalyticsUrl.
+const VIDEO_ANALYTICS_FIELDS = [
+  'videoViews',
+  'videoCompletions',
+  'videoStarts',
+  'videoFirstQuartileCompletions',
+  'videoMidpointCompletions',
+  'videoThirdQuartileCompletions',
+];
+
 const LEAD_FORM_ANALYTICS_FIELDS = [
   'oneClickLeads',
   'viralOneClickLeads',
@@ -310,6 +331,12 @@ const CREATIVE_ANALYTICS_FIELDS = [
   'costInLocalCurrency',
   'totalEngagements',
   'landingPageClicks',
+  'videoViews',
+  'videoCompletions',
+  'videoStarts',
+  'videoFirstQuartileCompletions',
+  'videoMidpointCompletions',
+  'videoThirdQuartileCompletions',
 ];
 
 function buildAnalyticsUrl(campaignUrn: string, dateRangeQuery: string, fields: string[]) {
@@ -482,10 +509,57 @@ serve(async (req) => {
         pageToken = campaignsData.metadata?.nextPageToken ?? null;
       } while (pageToken);
 
+      const campaignNameExcludes = getCampaignNameExcludes();
+
+      // Campaign start date cutoff — only sync campaigns that started on or after 2026-07-01
+      const CAMPAIGN_START_CUTOFF = new Date('2026-07-01T00:00:00Z').getTime();
+
+      const MONTH_MAP: Record<string, number> = {
+        jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+        jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+      };
+
+      function isCampaignBeforeCutoff(name: string, runScheduleStart?: number): boolean {
+        // Check via LinkedIn API runSchedule field
+        if (typeof runScheduleStart === 'number' && runScheduleStart > 0) {
+          return runScheduleStart < CAMPAIGN_START_CUTOFF;
+        }
+        // Fallback: parse date from campaign name, e.g. "Video views - Jan 30, 2026" or "2026/07/01_..."
+        const shortMonthMatch = name.match(/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d+,?\s+(\d{4})/i);
+        if (shortMonthMatch) {
+          const month = MONTH_MAP[shortMonthMatch[1].toLowerCase()];
+          const year = parseInt(shortMonthMatch[2], 10);
+          return new Date(Date.UTC(year, month - 1, 1)).getTime() < CAMPAIGN_START_CUTOFF;
+        }
+        const slashDateMatch = name.match(/(\d{4})\/(\d{2})\/(\d{2})/);
+        if (slashDateMatch) {
+          return new Date(`${slashDateMatch[1]}-${slashDateMatch[2]}-${slashDateMatch[3]}T00:00:00Z`).getTime() < CAMPAIGN_START_CUTOFF;
+        }
+        return false; // no date found — allow through
+      }
+
       const filteredCampaigns = campaigns.filter((rawCamp) => {
         const campaignId = String(rawCamp.id);
         const campaignName = String(rawCamp.name ?? `LinkedIn campaign ${campaignId}`);
-        return campaignMatchesNameFilter(campaignName, campaignNameIncludes);
+        const campaignNameLower = campaignName.toLowerCase();
+
+        // 1. Name include filter
+        if (!campaignMatchesNameFilter(campaignName, campaignNameIncludes)) return false;
+
+        // 2. Explicit blocklist (LINKEDIN_CAMPAIGN_NAME_EXCLUDES env variable)
+        if (campaignNameExcludes.some((term) => campaignNameLower.includes(term))) {
+          console.log(`Skipping "${campaignName}" — matched explicit exclude list`);
+          return false;
+        }
+
+        // 3. Start date cutoff filter
+        const runScheduleStart: number | undefined = (rawCamp as any).runSchedule?.start;
+        if (isCampaignBeforeCutoff(campaignName, runScheduleStart)) {
+          console.log(`Skipping "${campaignName}" — before 2026-07-01 cutoff (runSchedule.start=${runScheduleStart})`);
+          return false;
+        }
+
+        return true;
       });
 
       await supabaseClient
@@ -577,6 +651,8 @@ serve(async (req) => {
                 cpc_inr: cpc,
                 cpl_inr: cpl,
                 leads,
+                // Note: video fields not available at the CAMPAIGN pivot in LinkedIn's API.
+                // Video data is captured per-creative in ad_performance_metrics below.
               }, { onConflict: 'campaign_id,date_range_start,date_range_end' });
           }
         }
@@ -625,6 +701,12 @@ serve(async (req) => {
                 reference: creative.reference,
                 creative_url: creative.creative_url,
                 thumbnail_url: thumbnailUrl,
+                video_views: stat.videoViews || 0,
+                video_completions: stat.videoCompletions || 0,
+                video_starts: stat.videoStarts || 0,
+                video_first_quartile_completions: stat.videoFirstQuartileCompletions || 0,
+                video_midpoint_completions: stat.videoMidpointCompletions || 0,
+                video_third_quartile_completions: stat.videoThirdQuartileCompletions || 0,
               }, { onConflict: 'campaign_id,creative_id,date' });
           }
         }
