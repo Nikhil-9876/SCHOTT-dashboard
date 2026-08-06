@@ -485,18 +485,43 @@ export default function TOFUPage() {
           )}
 
           {/* Campaign Details */}
-          <SectionHeader>Campaign Details</SectionHeader>
+          {isVideoObjective ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', margin: '2rem 0 1rem', paddingBottom: '0.5rem', borderBottom: '2px solid var(--color-navy)' }}>
+              <span className="section-header" style={{ margin: 0, border: 'none', paddingBottom: 0 }}>Campaign Details</span>
+              <div className="filter-group" style={{ margin: 0 }}>
+                <span className="filter-label" style={{ fontSize: 11, fontWeight: 700 }}>VIEW METRICS:</span>
+                <div className="filter-pills">
+                  <button
+                    className={`filter-pill ${videoMetricMode === 'general' ? 'active' : ''}`}
+                    onClick={() => setVideoMetricMode('general')}
+                    style={{ fontSize: 11, padding: '0.2rem 0.65rem' }}
+                  >
+                    General
+                  </button>
+                  <button
+                    className={`filter-pill ${videoMetricMode === 'video' ? 'active' : ''}`}
+                    onClick={() => setVideoMetricMode('video')}
+                    style={{ fontSize: 11, padding: '0.2rem 0.65rem' }}
+                  >
+                    Video Specific
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <SectionHeader>Campaign Details</SectionHeader>
+          )}
           <ChartContainer>
             <div className="table-wrapper">
               <table>
                 <thead>
                   <tr>
-                    <th>Campaign Name</th><th>Objective</th><th>Status</th><th>Ads</th>
-                    <th title="Total Spend in Euros">Spent</th><th>Impressions</th>
-                    {isVideoObjective ? (
-                      <><th title="Total Video Views">Video Views</th><th title="Video View Rate (Views / Impressions)">VR%</th><th title="Cost Per View">CPV</th><th title="Video Completion Rate">CR%</th><th title="Number of days the campaign has been or was running">Days</th></>
+                    <th>Campaign Name</th><th>Objective</th><th>Status</th><th className="td-num">Ads</th>
+                    <th className="td-num" title="Total Spend in Euros">Spent</th><th className="td-num">Impressions</th>
+                    {isVideoObjective && videoMetricMode === 'video' ? (
+                      <><th className="td-num" title="Total Video Views">Video Views</th><th className="td-num" title="Video View Rate (Views / Impressions)">VR%</th><th className="td-num" title="Video Starts">VS</th><th className="td-num" title="25% of video watched">25%</th><th className="td-num" title="50% of video watched">50%</th><th className="td-num" title="75% of video watched">75%</th><th className="td-num" title="Video Completion Rate">CR%</th><th className="td-num" title="Cost Per View">CPV</th><th className="td-num" title="Number of days the campaign has been or was running">Days</th></>
                     ) : (
-                      <><th title="Total Unique Reach">Reach</th><th>Clicks</th><th title="Click-Through Rate">CTR</th><th title="Cost Per Mille (Cost Per Thousand Impressions)">CPM</th><th title="Cost Per Click">CPC</th><th>Leads</th><th title="Number of days the campaign has been or was running">Days</th></>
+                      <><th className="td-num" title="Total Unique Reach">Reach</th><th className="td-num">Clicks</th><th className="td-num" title="Click-Through Rate">CTR</th><th className="td-num" title="Cost Per Mille (Cost Per Thousand Impressions)">CPM</th><th className="td-num" title="Cost Per Click">CPC</th><th className="td-num">Leads</th><th className="td-num" title="Number of days the campaign has been or was running">Days</th></>
                     )}
                   </tr>
                 </thead>
@@ -510,7 +535,7 @@ export default function TOFUPage() {
                     const cpc = clicks ? spend / clicks : 0;
                     const days = formatDays(computeDays(m?.date_range_start, c.status === 'ACTIVE' ? undefined : m?.date_range_end));
 
-                    if (isVideoObjective) {
+                    if (isVideoObjective && videoMetricMode === 'video') {
                       const v = campaignVideoTotals.get(c.id) ?? { video_views: 0, video_starts: 0, video_completions: 0, video_q1: 0, video_q2: 0, video_q3: 0, spend: 0, impressions: 0 };
                       const vImpr = v.impressions || impressions;
                       const vViewRate = vImpr > 0 ? v.video_views / vImpr : 0;
@@ -521,13 +546,17 @@ export default function TOFUPage() {
                           <td>{c.name}</td>
                           <td><span className={`objective-tag objective-${c.objective.toLowerCase().replace(' ', '-')}`}>{c.objective}</span></td>
                           <td><Badge status={c.status} /></td>
-                          <td>{c.ad_count}</td>
-                          <td>{formatEUR(v.spend || spend)}</td>
-                          <td>{formatNumber(vImpr)}</td>
+                          <td className="td-nowrap td-num">{c.ad_count}</td>
+                          <td className="td-nowrap td-num">{formatEUR(v.spend || spend)}</td>
+                          <td className="td-nowrap td-num">{formatNumber(vImpr)}</td>
                           <td className="td-nowrap td-num">{formatNumber(v.video_views)}</td>
                           <td className="td-nowrap td-num">{formatPercent(vViewRate)}</td>
-                          <td className="td-nowrap td-num">{formatEUR(vCPV)}</td>
+                          <td className="td-nowrap td-num">{formatNumber(v.video_starts)}</td>
+                          <td className="td-nowrap td-num">{formatNumber(v.video_q1)}</td>
+                          <td className="td-nowrap td-num">{formatNumber(v.video_q2)}</td>
+                          <td className="td-nowrap td-num">{formatNumber(v.video_q3)}</td>
                           <td className="td-nowrap td-num">{formatPercent(vComplRate)}</td>
+                          <td className="td-nowrap td-num">{formatEUR(vCPV)}</td>
                           <td className="td-nowrap td-num">{days}</td>
                         </tr>
                       );
@@ -542,15 +571,15 @@ export default function TOFUPage() {
                           </span>
                         </td>
                         <td><Badge status={c.status} /></td>
-                        <td>{c.ad_count}</td>
-                        <td>{formatEUR(spend)}</td>
-                        <td>{formatNumber(impressions)}</td>
-                        <td>{formatNumber(m?.reach ?? 0)}</td>
-                        <td>{formatNumber(clicks)}</td>
-                        <td>{formatPercent(m?.ctr ?? 0)}</td>
-                        <td>{formatEUR(cpm)}</td>
-                        <td>{formatEUR(cpc)}</td>
-                        <td>{formatNumber(m?.leads ?? 0)}</td>
+                        <td className="td-nowrap td-num">{c.ad_count}</td>
+                        <td className="td-nowrap td-num">{formatEUR(spend)}</td>
+                        <td className="td-nowrap td-num">{formatNumber(impressions)}</td>
+                        <td className="td-nowrap td-num">{formatNumber(m?.reach ?? 0)}</td>
+                        <td className="td-nowrap td-num">{formatNumber(clicks)}</td>
+                        <td className="td-nowrap td-num">{formatPercent(m?.ctr ?? 0)}</td>
+                        <td className="td-nowrap td-num">{formatEUR(cpm)}</td>
+                        <td className="td-nowrap td-num">{formatEUR(cpc)}</td>
+                        <td className="td-nowrap td-num">{formatNumber(m?.leads ?? 0)}</td>
                         <td className="td-nowrap td-num">{days}</td>
                       </tr>
                     );
