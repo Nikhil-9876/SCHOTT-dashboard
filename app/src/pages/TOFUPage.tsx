@@ -197,7 +197,7 @@ export default function TOFUPage() {
 
   // ── Filter by objective (1 campaign per objective, no sub-filter needed) ─
   // Also exclude known stale/old campaigns that should not appear on the dashboard
-  const EXCLUDED_CAMPAIGN_NAMES = ['video views - jan 30, 2026'];
+  const EXCLUDED_CAMPAIGN_NAMES = ['video views - jan 30, 2026', 'video views - jul 22, 2026'];
   const filteredCampaigns = useMemo(() => {
     let result = campaignsWithObjective.filter(
       c => !EXCLUDED_CAMPAIGN_NAMES.includes(c.name.toLowerCase())
@@ -572,8 +572,8 @@ export default function TOFUPage() {
             if (selectedObjective === 'All') {
               // ── All tab: group by objective type ──────────────────────────
               const OBJECTIVE_COLORS: Record<string, string> = {
-                'Awareness':   '#062E62',
-                'Engagement':  '#0050FF',
+                'Awareness': '#062E62',
+                'Engagement': '#0050FF',
                 'Video Views': '#3B82F6',
               };
               type ObjKey = 'Awareness' | 'Engagement' | 'Video Views';
@@ -588,14 +588,14 @@ export default function TOFUPage() {
                 const obj = c.objective as ObjKey;
                 if (!grouped[obj]) return;
                 grouped[obj].impressions += c.latest_metric?.impressions ?? 0;
-                grouped[obj].clicks     += c.latest_metric?.clicks ?? 0;
+                grouped[obj].clicks += c.latest_metric?.clicks ?? 0;
               });
 
               const activeKeys = objKeys.filter(k => grouped[k].impressions > 0 || grouped[k].clicks > 0);
-              chartLabels    = activeKeys;
-              chartColors    = activeKeys.map(k => OBJECTIVE_COLORS[k]);
+              chartLabels = activeKeys;
+              chartColors = activeKeys.map(k => OBJECTIVE_COLORS[k]);
               impressionVals = activeKeys.map(k => grouped[k].impressions);
-              ctrVals        = activeKeys.map(k => {
+              ctrVals = activeKeys.map(k => {
                 const { clicks, impressions } = grouped[k];
                 return impressions > 0 ? parseFloat(((clicks / impressions) * 100).toFixed(3)) : 0;
               });
@@ -610,11 +610,11 @@ export default function TOFUPage() {
                 return label.length > 28 ? label.slice(0, 26) + '…' : label;
               };
 
-              chartLabels    = filteredCampaigns.map(c => shortLabel(c.name));
-              chartColors    = filteredCampaigns.map(() => '#0050FF');
+              chartLabels = filteredCampaigns.map(c => shortLabel(c.name));
+              chartColors = filteredCampaigns.map(() => '#0050FF');
               impressionVals = filteredCampaigns.map(c => c.latest_metric?.impressions ?? 0);
-              ctrVals        = filteredCampaigns.map(c => {
-                const clicks      = c.latest_metric?.clicks ?? 0;
+              ctrVals = filteredCampaigns.map(c => {
+                const clicks = c.latest_metric?.clicks ?? 0;
                 const impressions = c.latest_metric?.impressions ?? 0;
                 return impressions > 0 ? parseFloat(((clicks / impressions) * 100).toFixed(3)) : 0;
               });
@@ -665,7 +665,7 @@ export default function TOFUPage() {
                     onClick={() => setVideoMetricMode('video')}
                     style={{ fontSize: 11, padding: '0.2rem 0.65rem' }}
                   >
-                   Video Specific
+                    Video Specific
                   </button>
                 </div>
               </div>
@@ -917,7 +917,7 @@ export default function TOFUPage() {
           {/* ── Daily Ad Performance (Raw) ── */}
           <div className="section-header-row" style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'flex-end', justifyContent: 'space-between' }}>
             <span className="section-header" style={{ margin: 0, border: 'none', paddingBottom: 0 }}>Daily Ad Performance</span>
-            
+
             <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', flexWrap: 'wrap' }}>
               {isVideoObjective && (
                 <div className="filter-group" style={{ margin: 0 }}>
@@ -935,7 +935,7 @@ export default function TOFUPage() {
                       onClick={() => setVideoMetricMode('video')}
                       style={{ fontSize: 11, padding: '0.2rem 0.65rem' }}
                     >
-                     Video Specific
+                      Video Specific
                     </button>
                   </div>
                 </div>
