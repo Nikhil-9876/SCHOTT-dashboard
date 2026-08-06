@@ -213,11 +213,26 @@ export default function TOFUPage() {
     return m;
   }, [data]);
 
+  const campaignStatusMap = useMemo<Record<string, string>>(() => {
+    const m: Record<string, string> = {};
+    (data ?? []).forEach(c => { m[c.id] = c.status; });
+    return m;
+  }, [data]);
+
   // ── Filtered ad rows ────────────────────────────────────────────────────
   const filteredAdRows = useMemo(() => {
     const allowedIds = new Set(filteredCampaigns.map(c => c.id));
-    return adPerformance.filter(r => allowedIds.has(r.campaign_id));
-  }, [adPerformance, filteredCampaigns]);
+    return adPerformance
+      .filter(r => allowedIds.has(r.campaign_id))
+      .map(r => {
+        const campStatus = campaignStatusMap[r.campaign_id];
+        // If the campaign is not ACTIVE but the ad shows ACTIVE, inherit campaign status
+        if (r.status === 'ACTIVE' && campStatus && campStatus !== 'ACTIVE') {
+          return { ...r, status: campStatus };
+        }
+        return r;
+      });
+  }, [adPerformance, filteredCampaigns, campaignStatusMap]);
 
   // ── Aggregated assets ───────────────────────────────────────────────────
   const aggregatedAssets = useMemo(() => aggregateAdsByCreative(filteredAdRows, campaignNameMap), [filteredAdRows, campaignNameMap]);
