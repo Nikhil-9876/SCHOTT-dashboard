@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 
 interface AssetThumbnailProps {
@@ -11,16 +11,27 @@ export default function AssetThumbnail({ thumbnailUrl, creativeName, creativeUrl
   const [isHovered, setIsHovered] = useState(false);
   const [popoverPos, setPopoverPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const ref = useRef<HTMLDivElement>(null);
+  const hoverTimeout = useRef<number | null>(null);
+
+  // Clean up timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
+    };
+  }, []);
 
   if (!thumbnailUrl) {
     return <span className="ad-thumb-placeholder" title="No preview image">🖼️</span>;
   }
 
+  const embedUrl = creativeUrl ? creativeUrl.replace('/feed/update/', '/embed/feed/update/') : null;
+  const popoverWidth = embedUrl ? 330 : 240;
+  const popoverHeight = embedUrl ? 420 : 315;
+
   const handleMouseEnter = () => {
+    if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
     if (!ref.current) return;
     const rect = ref.current.getBoundingClientRect();
-    const popoverWidth = 260;
-    const popoverHeight = 180;
 
     let left = rect.right + 12;
     if (window.innerWidth - rect.right < popoverWidth + 20) {
@@ -37,6 +48,16 @@ export default function AssetThumbnail({ thumbnailUrl, creativeName, creativeUrl
     setIsHovered(true);
   };
 
+  const handleMouseLeave = () => {
+    hoverTimeout.current = window.setTimeout(() => {
+      setIsHovered(false);
+    }, 300); // 300ms delay gives user time to move mouse into popover
+  };
+
+  const handlePopoverMouseEnter = () => {
+    if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
+  };
+
   const imageElement = (
     <img src={thumbnailUrl} alt={creativeName ?? 'Asset'} className="ad-thumb" />
   );
@@ -46,7 +67,7 @@ export default function AssetThumbnail({ thumbnailUrl, creativeName, creativeUrl
       ref={ref}
       className="asset-thumb-container"
       onMouseEnter={handleMouseEnter}
-      onMouseLeave={() => setIsHovered(false)}
+      onMouseLeave={handleMouseLeave}
     >
       {creativeUrl ? (
         <a href={creativeUrl} target="_blank" rel="noopener noreferrer" title={`Open ad on LinkedIn: ${creativeName ?? ''}`}>
@@ -65,10 +86,33 @@ export default function AssetThumbnail({ thumbnailUrl, creativeName, creativeUrl
               top: `${popoverPos.top}px`,
               left: `${popoverPos.left}px`,
               zIndex: 99999,
-              pointerEvents: 'none',
+              pointerEvents: 'auto', // Important: must be 'auto' to click play
+              background: '#fff',
+              boxShadow: '0 8px 30px rgba(0,0,0,0.25)',
+              borderRadius: '8px',
+              overflow: 'hidden',
+              display: 'flex',
             }}
+            onMouseEnter={handlePopoverMouseEnter}
+            onMouseLeave={handleMouseLeave}
           >
-            <img src={thumbnailUrl} alt={creativeName ?? 'Enlarged Asset'} />
+            {embedUrl ? (
+              <iframe
+                src={embedUrl}
+                width={popoverWidth}
+                height={popoverHeight}
+                frameBorder="0"
+                allowFullScreen
+                title={creativeName ?? 'Embedded post'}
+                style={{ background: '#fff', display: 'block' }}
+              />
+            ) : (
+              <img 
+                src={thumbnailUrl} 
+                alt={creativeName ?? 'Enlarged Asset'} 
+                style={{ width: popoverWidth, height: 'auto', display: 'block' }}
+              />
+            )}
           </div>,
           document.body
         )}
