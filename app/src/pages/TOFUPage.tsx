@@ -591,7 +591,7 @@ export default function TOFUPage() {
                     <th>Campaign Name</th><th>Objective</th><th>Status</th><th className="td-num">Ads</th>
                     {!(isVideoObjective && videoMetricMode === 'video') && <><th className="td-num" title="Total Spend in Euros">Spent</th><th className="td-num">Impressions</th></>}
                     {isVideoObjective && videoMetricMode === 'video' ? (
-                      <><th className="td-num" title="Total Video Views">Video Views</th><th className="td-num" title="Video View Rate (Views / Impressions)">VR%</th><th className="td-num" title="Video Starts">VS</th><th className="td-num" title="25% of video watched">25%</th><th className="td-num" title="50% of video watched">50%</th><th className="td-num" title="75% of video watched">75%</th><th className="td-num" title="Video Completions (count of viewers who watched 100%)">100%</th><th className="td-num" title="Completion Rate (completions / video views)">CR%</th><th className="td-num" title="Cost Per View">CPV</th><th className="td-num" title="Avg Watch Depth — incremental band estimate of average percentage of video watched">AWD%</th></>
+                      <><th className="td-num" title="Total Video Views">Video Views</th><th className="td-num" title="Video View Rate (Views / Impressions)">VR%</th><th className="td-num" title="Video Starts">VS</th><th className="td-num" title="25% of video watched">25%</th><th className="td-num" title="50% of video watched">50%</th><th className="td-num" title="75% of video watched">75%</th><th className="td-num" title="Video Completions (count of viewers who watched 100%)">100%</th><th className="td-num" title="Completion Rate (completions / video views)">CR%</th><th className="td-num" title="Cost Per View">CPV</th><th className="td-num" title="Average Watch Depth — estimated average % of video watched per viewer">AWD%</th></>
                     ) : (
                       <><th className="td-num" title="Total Unique Reach">Reach</th><th className="td-num">Clicks</th><th className="td-num" title="Click-Through Rate">CTR</th><th className="td-num" title="Cost Per Mille (Cost Per Thousand Impressions)">CPM</th><th className="td-num" title="Cost Per Click">CPC</th><th className="td-num">Leads</th><th className="td-num" title="Number of days the campaign has been or was running">Days</th></>
                     )}
@@ -863,7 +863,7 @@ export default function TOFUPage() {
                           </th>
                           <th className="th-num-xs metric-swap-cell" style={{ whiteSpace: 'nowrap' }} title="Completion Rate (completions / video views)">CR%</th>
                           <th className="th-num-xs metric-swap-cell" style={{ whiteSpace: 'nowrap' }} title="Cost Per View">CPV</th>
-                          <th className="th-num-xs metric-swap-cell" onClick={() => handleSort('avg_watch_depth')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Avg Watch Depth — incremental band midpoint estimate of the average percentage of video watched by viewers">
+                          <th className="th-num-xs metric-swap-cell" onClick={() => handleSort('avg_watch_depth')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Average Watch Depth — estimated average % of video watched per viewer">
                             AWD%{renderSortIndicatorAd('avg_watch_depth')}
                           </th>
                         </>
@@ -1106,7 +1106,7 @@ export default function TOFUPage() {
                            <th className="th-num-xs metric-swap-cell" title="Video Completions — count of viewers who watched 100%">100%</th>
                            <th className="th-num-xs metric-swap-cell" title="Completion Rate (completions / video views)">CR%</th>
                            <th className="th-num-xs metric-swap-cell" title="Cost Per View">CPV</th>
-                           <th className="th-num-xs metric-swap-cell" title="Avg Watch Depth — incremental band estimate of average percentage of video watched">AWD%</th>
+                           <th className="th-num-xs metric-swap-cell" title="Average Watch Depth — estimated average % of video watched per viewer">AWD%</th>
                          </>
                       ) : (
                         <>
