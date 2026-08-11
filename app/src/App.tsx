@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import TOFUPage from './pages/TOFUPage';
 import MOFUPage from './pages/MOFUPage';
 import BOFUPage from './pages/BOFUPage';
+import DemographicsPage from './pages/DemographicsPage';
 import LinkedInCallback from './pages/LinkedInCallback';
 import { SafetyProvider } from './context/SafetyContext';
 
@@ -31,6 +32,7 @@ export default function App() {
             <Route path="/tofu" element={<TOFUPage />} />
             <Route path="/mofu" element={<MOFUPage />} />
             <Route path="/bofu" element={<BOFUPage />} />
+            <Route path="/demographics" element={<DemographicsPage />} />
             <Route path="/auth/callback" element={<LinkedInCallback />} />
           </Routes>
         </BrowserRouter>

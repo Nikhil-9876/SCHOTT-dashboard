@@ -562,6 +562,56 @@ function buildDemoPivotUrl(pivot: DemoPivot, campaignUrn: string, dateRangeQuery
   return `https://api.linkedin.com/rest/adAnalytics?${params.join('&')}`;
 }
 
+
+// ── Fetch video duration from LinkedIn Media Assets API ─────────────────────
+// LinkedIn video creatives reference a ugcPost (or share) URN, not a
+// digitalmediaAsset URN directly. We resolve: reference → post → mediaAsset → duration.
+async function fetchVideoDuration(
+  referenceUrn: string,
+  headers: Record<string, string>,
+): Promise<number | null> {
+  try {
+    let mediaAssetUrn: string | null = null;
+
+    if (referenceUrn.startsWith('urn:li:ugcPost:') || referenceUrn.startsWith('urn:li:share:')) {
+      const postId = encodeURIComponent(referenceUrn);
+      const postRes = await fetch(`https://api.linkedin.com/rest/posts/${postId}`, { headers });
+      if (postRes.ok) {
+        const postData = await postRes.json();
+        // Path for video posts: content -> media -> id (asset URN)
+        const mediaId = postData?.content?.media?.id;
+        if (typeof mediaId === 'string' && mediaId.startsWith('urn:li:digitalmediaAsset:')) {
+          mediaAssetUrn = mediaId;
+        }
+      } else {
+        console.warn(`[video-duration] Failed to fetch post ${referenceUrn} (possibly missing r_organization_social scope): HTTP ${postRes.status}`);
+      }
+    } else if (referenceUrn.startsWith('urn:li:digitalmediaAsset:')) {
+      // Direct asset reference (less common)
+      mediaAssetUrn = referenceUrn;
+    }
+
+    if (!mediaAssetUrn) return null;
+
+    // Step 2: Fetch the media asset to get duration
+    const encodedAsset = encodeURIComponent(mediaAssetUrn);
+    const assetRes = await fetch(`https://api.linkedin.com/rest/mediaAssets/${encodedAsset}`, { headers });
+    if (!assetRes.ok) {
+      console.warn(`[video-duration] Failed to fetch asset ${mediaAssetUrn}: HTTP ${assetRes.status}`);
+      return null;
+    }
+    const assetData = await assetRes.json();
+    const durationMs = assetData?.mediaProcessorAttributes?.videoProcessorAttribute?.duration;
+    if (typeof durationMs === 'number' && durationMs > 0) {
+      return durationMs / 1000;
+    }
+    return null;
+  } catch (err) {
+    console.warn(`[video-duration] Unexpected error for ${referenceUrn}:`, err);
+    return null;
+  }
+}
+
 // ── Concurrency limiter ───────────────────────────────────────────────────────
 // Runs `tasks` with at most `concurrency` running at the same time.
 async function runWithConcurrency<T>(tasks: (() => Promise<T>)[], concurrency: number): Promise<T[]> {
@@ -874,6 +924,9 @@ serve(async (req) => {
         ]);
         const adCount = creatives.length;
 
+        // Cache of assetUrn → video duration in seconds (fetched once per creative, reused across daily rows)
+        const videoDurationCache = new Map<string, number | null>();
+
         // Map LinkedIn statuses to DB constraint: 'ACTIVE' | 'COMPLETED' | 'PAUSED'
         let mappedStatus: 'ACTIVE' | 'COMPLETED' | 'PAUSED' = 'PAUSED';
         if (rawCamp.status === 'ACTIVE') mappedStatus = 'ACTIVE';
@@ -964,6 +1017,22 @@ serve(async (req) => {
             thumbnailPromise,
           ]);
 
+          // Fetch video duration (once per creative reference, cached).
+          // Works for ugcPost, share, or direct digitalmediaAsset references.
+          let videoDurationSeconds: number | null = null;
+          const assetUrn = creative.reference || null;
+          if (assetUrn) {
+            if (videoDurationCache.has(assetUrn)) {
+              videoDurationSeconds = videoDurationCache.get(assetUrn) ?? null;
+            } else {
+              videoDurationSeconds = await fetchVideoDuration(assetUrn, apiHeaders);
+              videoDurationCache.set(assetUrn, videoDurationSeconds);
+              if (videoDurationSeconds !== null) {
+                console.log(`[video-duration] ✓ ${assetUrn} → ${videoDurationSeconds}s`);
+              }
+            }
+          }
+
           if (!creativeAnalyticsRes.ok) {
             console.warn(`Failed to fetch ad analytics for ${creativeUrn}: ${await creativeAnalyticsRes.text()}`);
             return;
@@ -998,6 +1067,7 @@ serve(async (req) => {
               video_first_quartile_completions: Number(stat.videoFirstQuartileCompletions) || 0,
               video_midpoint_completions: Number(stat.videoMidpointCompletions) || 0,
               video_third_quartile_completions: Number(stat.videoThirdQuartileCompletions) || 0,
+              video_duration_seconds: videoDurationSeconds,
             };
           });
 

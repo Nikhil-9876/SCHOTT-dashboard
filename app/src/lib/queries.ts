@@ -1,12 +1,13 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
-import type { AdPerformanceMetric, Campaign, CampaignMetric, CampaignWithMetrics, FunnelStage, IngestionLog } from '../types';
+import type { AdPerformanceMetric, Campaign, CampaignMetric, CampaignWithMetrics, DemographicMetric, FunnelStage, IngestionLog } from '../types';
 
 // ── Query Keys ──────────────────────────────────────────────────────────────
 export const QUERY_KEYS = {
-  campaigns: (stage?: FunnelStage) => ['campaigns', stage ?? 'all'] as const,
-  adPerformance: (stage?: FunnelStage) => ['ad_performance', stage ?? 'all'] as const,
-  ingestionLog: ['ingestion_log'] as const,
+  campaigns:        (stage?: FunnelStage) => ['campaigns', stage ?? 'all'] as const,
+  adPerformance:    (stage?: FunnelStage) => ['ad_performance', stage ?? 'all'] as const,
+  demographics:     (stage?: FunnelStage) => ['demographics', stage ?? 'all'] as const,
+  ingestionLog:     ['ingestion_log'] as const,
 };
 
 const STALE_TIME = 1000 * 60 * 60;       // 1 hour
@@ -202,6 +203,35 @@ export function useAdPerformance(funnelStage?: FunnelStage) {
   return useQuery<AdPerformanceMetric[], Error>({
     queryKey: QUERY_KEYS.adPerformance(funnelStage),
     queryFn: () => fetchAdPerformance(funnelStage),
+    staleTime: STALE_TIME,
+    gcTime: GC_TIME,
+  });
+}
+
+async function fetchDemographics(funnelStage?: FunnelStage): Promise<DemographicMetric[]> {
+  // Join through campaigns so we can filter by funnel_stage
+  let query = supabase
+    .from('demographic_metrics')
+    .select(`
+      *,
+      campaign:campaigns ( id, funnel_stage )
+    `)
+    .order('impressions', { ascending: false });
+
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+
+  const rows = (data ?? []) as (DemographicMetric & { campaign: { id: string; funnel_stage: string } | null })[];
+  if (funnelStage) {
+    return rows.filter(r => r.campaign?.funnel_stage === funnelStage);
+  }
+  return rows;
+}
+
+export function useDemographicMetrics(funnelStage?: FunnelStage) {
+  return useQuery<DemographicMetric[], Error>({
+    queryKey: QUERY_KEYS.demographics(funnelStage),
+    queryFn: () => fetchDemographics(funnelStage),
     staleTime: STALE_TIME,
     gcTime: GC_TIME,
   });

@@ -72,10 +72,26 @@ export interface AdPerformanceMetric {
   video_first_quartile_completions: number | null;
   video_midpoint_completions: number | null;
   video_third_quartile_completions: number | null;
+  /** Video asset duration in seconds — fetched from LinkedIn Media Assets API */
+  video_duration_seconds: number | null;
   campaign?: Pick<Campaign, 'id' | 'name' | 'funnel_stage'>;
 }
 
 /** Joined type returned from Supabase query */
 export interface CampaignWithMetrics extends Campaign {
   latest_metric: CampaignMetric | null;
+}
+
+export type DemographicType = 'job_function' | 'seniority' | 'industry' | 'geo_country' | 'company_size';
+
+export interface DemographicMetric {
+  id: string;
+  campaign_id: string;
+  date: string;
+  demographic_type: DemographicType;
+  demographic_value: string;
+  impressions: number | null;
+  clicks: number | null;
+  spend_eur: number | null;
+  ingested_at: string;
 }

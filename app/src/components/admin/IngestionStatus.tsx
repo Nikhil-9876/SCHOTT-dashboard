@@ -29,7 +29,7 @@ export default function IngestionStatus() {
     const clientId = import.meta.env.VITE_LINKEDIN_CLIENT_ID || 'REPLACE_ME';
     const redirectUri = encodeURIComponent(window.location.origin + '/auth/callback');
     // Requesting r_ads and r_ads_reporting for real campaign and analytics access
-    const scope = encodeURIComponent('openid profile email r_ads r_ads_reporting');
+    const scope = encodeURIComponent('openid profile email r_ads r_ads_reporting r_organization_social');
     const authUrl = `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${clientId}&redirect_uri=${redirectUri}&scope=${scope}`;
     window.location.href = authUrl;
   };

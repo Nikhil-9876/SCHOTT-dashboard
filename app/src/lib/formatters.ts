@@ -81,3 +81,16 @@ export function formatDays(days: number | null): string {
   if (days === null || days === undefined) return '—';
   return `${days}d`;
 }
+
+/**
+ * Format a video watch duration in seconds to a readable string.
+ * e.g. 9.5 → "9.5s", 75.3 → "1m 15s", null → "—"
+ */
+export function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return '—';
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return `${m}m ${s.toString().padStart(2, '0')}s`;
+}
+

@@ -1,10 +1,11 @@
 import { NavLink } from 'react-router-dom';
 
 const tabs = [
-  { to: '/',     label: 'Dashboard',        end: true },
-  { to: '/tofu', label: 'FIOLAX Confidence' },
-  { to: '/mofu', label: 'FIOLAX Challenge'  },
-  { to: '/bofu', label: 'FIOLAX Experience' },
+  { to: '/',             label: 'Dashboard',        end: true },
+  { to: '/tofu',        label: 'FIOLAX Confidence' },
+  { to: '/mofu',        label: 'FIOLAX Challenge'  },
+  { to: '/bofu',        label: 'FIOLAX Experience' },
+  // { to: '/demographics', label: 'Demographics'  }, // temporarily hidden
 ];
 
 export default function NavBar() {
