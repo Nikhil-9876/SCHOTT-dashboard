@@ -65,6 +65,7 @@ interface AggregatedAd {
   video_first_quartile_completions: number;
   video_midpoint_completions: number;
   video_third_quartile_completions: number;
+  avg_watch_depth: number; // weighted avg of quartile milestones (0–1)
 }
 
 function aggregateAdsByCreative(rows: AdPerformanceMetric[], campaignNameMap: Record<string, string>): AggregatedAd[] {
@@ -98,7 +99,24 @@ function aggregateAdsByCreative(rows: AdPerformanceMetric[], campaignNameMap: Re
       existing.video_third_quartile_completions += row.video_third_quartile_completions ?? 0;
       // Recalculate CTR from totals
       existing.ctr = existing.impressions > 0 ? existing.clicks / existing.impressions : 0;
+      // Recalculate avg watch depth from totals (denominator = video_views, not starts)
+      const vv = existing.video_views;
+      existing.avg_watch_depth = vv > 0
+        ? (existing.video_first_quartile_completions * 0.25 +
+           existing.video_midpoint_completions * 0.50 +
+           existing.video_third_quartile_completions * 0.75 +
+           existing.video_completions * 1.0) / vv
+        : 0;
     } else {
+      const vStarts = row.video_starts ?? 0;
+      const vQ1 = row.video_first_quartile_completions ?? 0;
+      const vQ2 = row.video_midpoint_completions ?? 0;
+      const vQ3 = row.video_third_quartile_completions ?? 0;
+      const vCompl = row.video_completions ?? 0;
+      const vViews = row.video_views ?? 0;
+      const initDepth = vViews > 0
+        ? (vQ1 * 0.25 + vQ2 * 0.50 + vQ3 * 0.75 + vCompl * 1.0) / vViews
+        : 0;
       map.set(key, {
         creative_id: row.creative_id,
         creative_name: row.creative_name,
@@ -117,11 +135,12 @@ function aggregateAdsByCreative(rows: AdPerformanceMetric[], campaignNameMap: Re
         thumbnail_url: row.thumbnail_url ?? null,
         days_running: null, // filled below
         video_views: row.video_views ?? 0,
-        video_completions: row.video_completions ?? 0,
-        video_starts: row.video_starts ?? 0,
-        video_first_quartile_completions: row.video_first_quartile_completions ?? 0,
-        video_midpoint_completions: row.video_midpoint_completions ?? 0,
-        video_third_quartile_completions: row.video_third_quartile_completions ?? 0,
+        video_completions: vCompl,
+        video_starts: vStarts,
+        video_first_quartile_completions: vQ1,
+        video_midpoint_completions: vQ2,
+        video_third_quartile_completions: vQ3,
+        avg_watch_depth: initDepth,
       });
     }
   }
@@ -328,6 +347,12 @@ export default function TOFUPage() {
   const avgViewRate = totalVideoImpressions > 0 ? totalVideoViews / totalVideoImpressions : 0;
   const avgCPV = totalVideoViews > 0 ? totalVideoSpend / totalVideoViews : 0;
   const videoCompletionRate = totalVideoViews > 0 ? totalVideoCompletions / totalVideoViews : 0;
+  // Avg watch depth: weighted mean of quartile milestones relative to video_views
+  // (video_views = actual viewers 2s+; video_starts inflates denominator with auto-play)
+  const avgWatchDepth = totalVideoViews > 0
+    ? (totalVideoQ1 * 0.25 + totalVideoQ2 * 0.50 + totalVideoQ3 * 0.75 + totalVideoCompletions * 1.0) / totalVideoViews
+    : 0;
+  const hasVideoData = totalVideoStarts > 0 || totalVideoViews > 0;
   const isVideoObjective = selectedObjective === 'Video Views';
 
   // ── Per-campaign video totals (aggregated from ad_performance_metrics) ────
@@ -484,18 +509,27 @@ export default function TOFUPage() {
             <MetricCard label="CPM" value={formatEUR(avgCPM)} />
             <MetricCard label="CTR" value={formatPercent(avgCTR)} />
           </div>
-          <div className="grid-4" style={{ marginBottom: isVideoObjective ? '1rem' : '1.5rem' }}>
+          <div className="grid-4" style={{ marginBottom: hasVideoData ? '1rem' : '1.5rem' }}>
             <MetricCard label="Engagement Rate" value={formatPercent(avgEngRate)} />
             <MetricCard label="Ads" value={formatNumber(totalAds)} />
             <MetricCard label="Clicks" value={formatNumber(totalClicks)} />
             <MetricCard label="CPC" value={formatEUR(avgCPC)} />
           </div>
-          {isVideoObjective && (
-            <div className="grid-4" style={{ marginBottom: '1.5rem' }}>
+          {hasVideoData && (
+            <div className="grid-5" style={{ marginBottom: '1.5rem' }}>
               <MetricCard label="Video Views" value={formatNumber(totalVideoViews)} />
+              <MetricCard label="Video Starts" value={formatNumber(totalVideoStarts)} />
               <MetricCard label="View Rate" value={formatPercent(avgViewRate)} />
-              <MetricCard label="CPV" value={formatEUR(avgCPV)} />
               <MetricCard label="Completion Rate" value={formatPercent(videoCompletionRate)} />
+              <MetricCard label="CPV" value={formatEUR(avgCPV)} />
+            </div>
+          )}
+          {hasVideoData && (
+            <div className="grid-4" style={{ marginBottom: '1.5rem' }}>
+              <MetricCard label="25% Completions" value={formatNumber(totalVideoQ1)} />
+              <MetricCard label="50% Completions" value={formatNumber(totalVideoQ2)} />
+              <MetricCard label="75% Completions" value={formatNumber(totalVideoQ3)} />
+              <MetricCard label="Avg Watch Depth" value={formatPercent(avgWatchDepth)} />
             </div>
           )}
 
@@ -534,7 +568,7 @@ export default function TOFUPage() {
                     <th>Campaign Name</th><th>Objective</th><th>Status</th><th className="td-num">Ads</th>
                     <th className="td-num" title="Total Spend in Euros">Spent</th><th className="td-num">Impressions</th>
                     {isVideoObjective && videoMetricMode === 'video' ? (
-                      <><th className="td-num" title="Total Video Views">Video Views</th><th className="td-num" title="Video View Rate (Views / Impressions)">VR%</th><th className="td-num" title="Video Starts">VS</th><th className="td-num" title="25% of video watched">25%</th><th className="td-num" title="50% of video watched">50%</th><th className="td-num" title="75% of video watched">75%</th><th className="td-num" title="Video Completion Rate">CR%</th><th className="td-num" title="Cost Per View">CPV</th><th className="td-num" title="Number of days the campaign has been or was running">Days</th></>
+                      <><th className="td-num" title="Total Video Views">Video Views</th><th className="td-num" title="Video View Rate (Views / Impressions)">VR%</th><th className="td-num" title="Video Starts">VS</th><th className="td-num" title="25% of video watched">25%</th><th className="td-num" title="50% of video watched">50%</th><th className="td-num" title="75% of video watched">75%</th><th className="td-num" title="Video Completion Rate">CR%</th><th className="td-num" title="Cost Per View">CPV</th><th className="td-num" title="Avg Watch Depth — weighted average of quartile milestones relative to video starts">Avg Depth</th><th className="td-num" title="Number of days the campaign has been or was running">Days</th></>
                     ) : (
                       <><th className="td-num" title="Total Unique Reach">Reach</th><th className="td-num">Clicks</th><th className="td-num" title="Click-Through Rate">CTR</th><th className="td-num" title="Cost Per Mille (Cost Per Thousand Impressions)">CPM</th><th className="td-num" title="Cost Per Click">CPC</th><th className="td-num">Leads</th><th className="td-num" title="Number of days the campaign has been or was running">Days</th></>
                     )}
@@ -556,6 +590,9 @@ export default function TOFUPage() {
                       const vViewRate = vImpr > 0 ? v.video_views / vImpr : 0;
                       const vCPV = v.video_views > 0 ? v.spend / v.video_views : 0;
                       const vComplRate = v.video_views > 0 ? v.video_completions / v.video_views : 0;
+                      const vDepth = v.video_views > 0
+                        ? (v.video_q1 * 0.25 + v.video_q2 * 0.50 + v.video_q3 * 0.75 + v.video_completions * 1.0) / v.video_views
+                        : 0;
                       return (
                         <tr key={c.id}>
                           <td>{c.name}</td>
@@ -572,6 +609,7 @@ export default function TOFUPage() {
                           <td className="td-nowrap td-num">{formatNumber(v.video_q3)}</td>
                           <td className="td-nowrap td-num">{formatPercent(vComplRate)}</td>
                           <td className="td-nowrap td-num">{formatEUR(vCPV)}</td>
+                          <td className="td-nowrap td-num">{formatPercent(vDepth)}</td>
                           <td className="td-nowrap td-num">{days}</td>
                         </tr>
                       );
@@ -795,6 +833,9 @@ export default function TOFUPage() {
                             CR%{renderSortIndicatorAd('video_completions')}
                           </th>
                           <th className="th-num-xs metric-swap-cell" style={{ whiteSpace: 'nowrap' }} title="Cost Per View">CPV</th>
+                          <th className="th-num-xs metric-swap-cell" onClick={() => handleSort('avg_watch_depth')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Avg Watch Depth — weighted average of quartile milestones relative to video starts">
+                            Avg Depth{renderSortIndicatorAd('avg_watch_depth')}
+                          </th>
                         </>
                       ) : (
                         <>
@@ -914,6 +955,7 @@ export default function TOFUPage() {
                             const vViewRate = row.impressions > 0 ? vViews / row.impressions : 0;
                             const vComplRate = vViews > 0 ? vCompl / vViews : 0;
                             const vCPV = vViews > 0 ? row.spend_eur / vViews : 0;
+                            const vDepth = row.avg_watch_depth ?? 0;
                             return (<>
                               <td className="td-nowrap td-num metric-swap-cell">{formatNumber(vViews)}</td>
                               <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vViewRate)}</td>
@@ -923,6 +965,7 @@ export default function TOFUPage() {
                               <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ3)}</td>
                               <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vComplRate)}</td>
                               <td className="td-nowrap td-num metric-swap-cell">{formatEUR(vCPV)}</td>
+                              <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vDepth)}</td>
                             </>);
                           })() : (<>
                             <td className="td-nowrap td-num hide-lg metric-swap-cell">{formatNumber(row.reach)}</td>
@@ -948,7 +991,7 @@ export default function TOFUPage() {
                   })}
                   {sortedAssets.length === 0 && (
                     <tr>
-                      <td colSpan={isVideoObjective && videoMetricMode === 'video' ? 16 : 15} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>
+                      <td colSpan={isVideoObjective && videoMetricMode === 'video' ? 17 : 15} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>
                         No ad data available for the current selection.
                       </td>
                     </tr>
@@ -1026,6 +1069,7 @@ export default function TOFUPage() {
                           <th className="th-num-xs hide-md metric-swap-cell" title="75% of video watched">75%</th>
                           <th className="th-num-xs metric-swap-cell" title="Completion Rate (100% watched)">CR%</th>
                           <th className="th-num-xs metric-swap-cell" title="Cost Per View">CPV</th>
+                          <th className="th-num-xs metric-swap-cell" title="Avg Watch Depth — weighted average of quartile milestones relative to video starts">Avg Depth</th>
                         </>
                       ) : (
                         <>
@@ -1103,6 +1147,9 @@ export default function TOFUPage() {
                             const vViewRate = impressions > 0 ? vViews / impressions : 0;
                             const vComplRate = vViews > 0 ? vCompl / vViews : 0;
                             const vCPV = vViews > 0 ? spend / vViews : 0;
+                            const vDepth = vViews > 0
+                              ? (vQ1 * 0.25 + vQ2 * 0.50 + vQ3 * 0.75 + vCompl * 1.0) / vViews
+                              : 0;
                             return (<>
                               <td className="td-nowrap td-num metric-swap-cell">{formatNumber(vViews)}</td>
                               <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vViewRate)}</td>
@@ -1112,6 +1159,7 @@ export default function TOFUPage() {
                               <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ3)}</td>
                               <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vComplRate)}</td>
                               <td className="td-nowrap td-num metric-swap-cell">{formatEUR(vCPV)}</td>
+                              <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vDepth)}</td>
                             </>);
                           })() : (<>
                             <td className="td-nowrap td-num hide-lg metric-swap-cell">{formatNumber(row.reach ?? 0)}</td>
@@ -1136,7 +1184,7 @@ export default function TOFUPage() {
                   })}
                   {dailyAdRows.length === 0 && (
                     <tr>
-                      <td colSpan={isVideoObjective && videoMetricMode === 'video' ? 15 : 14} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>
+                      <td colSpan={isVideoObjective && videoMetricMode === 'video' ? 16 : 14} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>
                         No daily ad performance rows for the current selection.
                       </td>
                     </tr>
