@@ -12,8 +12,10 @@ const SafetyContext = createContext<SafetyContextType>({
   enableDisconnect: () => {},
 });
 
+const ENABLE_DISCONNECT_BY_DEFAULT = true; // Set to false to hide the disconnect button by default
+
 export function SafetyProvider({ children }: { children: React.ReactNode }) {
-  const [isDisconnectEnabled, setIsDisconnectEnabled] = useState(false);
+  const [isDisconnectEnabled, setIsDisconnectEnabled] = useState(ENABLE_DISCONNECT_BY_DEFAULT);
 
   const toggleDisconnect = () => setIsDisconnectEnabled(prev => !prev);
   const enableDisconnect = () => setIsDisconnectEnabled(true);
