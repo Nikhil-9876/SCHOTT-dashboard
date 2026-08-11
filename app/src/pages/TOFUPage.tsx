@@ -863,7 +863,7 @@ export default function TOFUPage() {
                           </th>
                           <th className="th-num-xs metric-swap-cell" style={{ whiteSpace: 'nowrap' }} title="Completion Rate (completions / video views)">CR%</th>
                           <th className="th-num-xs metric-swap-cell" style={{ whiteSpace: 'nowrap' }} title="Cost Per View">CPV</th>
-                          <th className="th-num-xs metric-swap-cell" onClick={() => handleSort('avg_watch_depth')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Avg Watch Depth — weighted average of quartile milestones relative to video starts">
+                          <th className="th-num-xs metric-swap-cell" onClick={() => handleSort('avg_watch_depth')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Avg Watch Depth — incremental band midpoint estimate of the average percentage of video watched by viewers">
                             AWD%{renderSortIndicatorAd('avg_watch_depth')}
                           </th>
                         </>
