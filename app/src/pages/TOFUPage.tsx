@@ -99,13 +99,20 @@ function aggregateAdsByCreative(rows: AdPerformanceMetric[], campaignNameMap: Re
       existing.video_third_quartile_completions += row.video_third_quartile_completions ?? 0;
       // Recalculate CTR from totals
       existing.ctr = existing.impressions > 0 ? existing.clicks / existing.impressions : 0;
-      // Recalculate avg watch depth from totals (denominator = video_views, not starts)
+      // Recalculate avg watch depth — incremental-band formula (cumulative quartile thresholds)
       const vv = existing.video_views;
+      const vQ1e = existing.video_first_quartile_completions;
+      const vQ2e = existing.video_midpoint_completions;
+      const vQ3e = existing.video_third_quartile_completions;
+      const vCe  = existing.video_completions;
       existing.avg_watch_depth = vv > 0
-        ? (existing.video_first_quartile_completions * 0.25 +
-           existing.video_midpoint_completions * 0.50 +
-           existing.video_third_quartile_completions * 0.75 +
-           existing.video_completions * 1.0) / vv
+        ? (
+            (vv  - vQ1e) * 0.125 +
+            (vQ1e - vQ2e) * 0.375 +
+            (vQ2e - vQ3e) * 0.625 +
+            (vQ3e - vCe)  * 0.875 +
+             vCe          * 1.0
+          ) / vv
         : 0;
     } else {
       const vStarts = row.video_starts ?? 0;
@@ -115,7 +122,13 @@ function aggregateAdsByCreative(rows: AdPerformanceMetric[], campaignNameMap: Re
       const vCompl = row.video_completions ?? 0;
       const vViews = row.video_views ?? 0;
       const initDepth = vViews > 0
-        ? (vQ1 * 0.25 + vQ2 * 0.50 + vQ3 * 0.75 + vCompl * 1.0) / vViews
+        ? (
+            (vViews - vQ1)  * 0.125 +
+            (vQ1    - vQ2)  * 0.375 +
+            (vQ2    - vQ3)  * 0.625 +
+            (vQ3    - vCompl) * 0.875 +
+             vCompl          * 1.0
+          ) / vViews
         : 0;
       map.set(key, {
         creative_id: row.creative_id,
@@ -347,10 +360,19 @@ export default function TOFUPage() {
   const avgViewRate = totalVideoImpressions > 0 ? totalVideoViews / totalVideoImpressions : 0;
   const avgCPV = totalVideoViews > 0 ? totalVideoSpend / totalVideoViews : 0;
   const videoCompletionRate = totalVideoViews > 0 ? totalVideoCompletions / totalVideoViews : 0;
-  // Avg watch depth: weighted mean of quartile milestones relative to video_views
-  // (video_views = actual viewers 2s+; video_starts inflates denominator with auto-play)
+  // Avg watch depth: incremental-band formula using cumulative quartile thresholds.
+  // Each viewer is assigned the midpoint of the band they dropped off in:
+  //   0–25%  → 12.5%  |  25–50% → 37.5%  |  50–75% → 62.5%  |  75–100% → 87.5%  |  completed → 100%
+  // This avoids double-counting (old formula could exceed 100%) and ensures completions
+  // anchor the average at full duration.
   const avgWatchDepth = totalVideoViews > 0
-    ? (totalVideoQ1 * 0.25 + totalVideoQ2 * 0.50 + totalVideoQ3 * 0.75 + totalVideoCompletions * 1.0) / totalVideoViews
+    ? (
+        (totalVideoViews      - totalVideoQ1)                     * 0.125 +
+        (totalVideoQ1         - totalVideoQ2)                     * 0.375 +
+        (totalVideoQ2         - totalVideoQ3)                     * 0.625 +
+        (totalVideoQ3         - totalVideoCompletions)            * 0.875 +
+         totalVideoCompletions                                    * 1.0
+      ) / totalVideoViews
     : 0;
   const hasVideoData = totalVideoStarts > 0 || totalVideoViews > 0;
   const isVideoObjective = selectedObjective === 'Video Views';
@@ -509,26 +531,27 @@ export default function TOFUPage() {
             <MetricCard label="CPM" value={formatEUR(avgCPM)} />
             <MetricCard label="CTR" value={formatPercent(avgCTR)} />
           </div>
-          <div className="grid-4" style={{ marginBottom: hasVideoData ? '1rem' : '1.5rem' }}>
+          <div className="grid-4" style={{ marginBottom: isVideoObjective ? '1rem' : '1.5rem' }}>
             <MetricCard label="Engagement Rate" value={formatPercent(avgEngRate)} />
             <MetricCard label="Ads" value={formatNumber(totalAds)} />
             <MetricCard label="Clicks" value={formatNumber(totalClicks)} />
             <MetricCard label="CPC" value={formatEUR(avgCPC)} />
           </div>
-          {hasVideoData && (
+          {isVideoObjective && (
             <div className="grid-5" style={{ marginBottom: '1.5rem' }}>
               <MetricCard label="Video Views" value={formatNumber(totalVideoViews)} />
               <MetricCard label="Video Starts" value={formatNumber(totalVideoStarts)} />
               <MetricCard label="View Rate" value={formatPercent(avgViewRate)} />
-              <MetricCard label="Completion Rate" value={formatPercent(videoCompletionRate)} />
+              <MetricCard label="Completions" value={formatNumber(totalVideoCompletions)} />
               <MetricCard label="CPV" value={formatEUR(avgCPV)} />
             </div>
           )}
-          {hasVideoData && (
-            <div className="grid-4" style={{ marginBottom: '1.5rem' }}>
+          {isVideoObjective && (
+            <div className="grid-5" style={{ marginBottom: '1.5rem' }}>
               <MetricCard label="25% Completions" value={formatNumber(totalVideoQ1)} />
               <MetricCard label="50% Completions" value={formatNumber(totalVideoQ2)} />
               <MetricCard label="75% Completions" value={formatNumber(totalVideoQ3)} />
+              <MetricCard label="CR%" value={formatPercent(videoCompletionRate)} />
               <MetricCard label="Avg Watch Depth" value={formatPercent(avgWatchDepth)} />
             </div>
           )}
@@ -566,9 +589,9 @@ export default function TOFUPage() {
                 <thead>
                   <tr>
                     <th>Campaign Name</th><th>Objective</th><th>Status</th><th className="td-num">Ads</th>
-                    <th className="td-num" title="Total Spend in Euros">Spent</th><th className="td-num">Impressions</th>
+                    {!(isVideoObjective && videoMetricMode === 'video') && <><th className="td-num" title="Total Spend in Euros">Spent</th><th className="td-num">Impressions</th></>}
                     {isVideoObjective && videoMetricMode === 'video' ? (
-                      <><th className="td-num" title="Total Video Views">Video Views</th><th className="td-num" title="Video View Rate (Views / Impressions)">VR%</th><th className="td-num" title="Video Starts">VS</th><th className="td-num" title="25% of video watched">25%</th><th className="td-num" title="50% of video watched">50%</th><th className="td-num" title="75% of video watched">75%</th><th className="td-num" title="Video Completion Rate">CR%</th><th className="td-num" title="Cost Per View">CPV</th><th className="td-num" title="Avg Watch Depth — weighted average of quartile milestones relative to video starts">Avg Depth</th><th className="td-num" title="Number of days the campaign has been or was running">Days</th></>
+                      <><th className="td-num" title="Total Video Views">Video Views</th><th className="td-num" title="Video View Rate (Views / Impressions)">VR%</th><th className="td-num" title="Video Starts">VS</th><th className="td-num" title="25% of video watched">25%</th><th className="td-num" title="50% of video watched">50%</th><th className="td-num" title="75% of video watched">75%</th><th className="td-num" title="Video Completions (count of viewers who watched 100%)">100%</th><th className="td-num" title="Completion Rate (completions / video views)">CR%</th><th className="td-num" title="Cost Per View">CPV</th><th className="td-num" title="Avg Watch Depth — incremental band estimate of average percentage of video watched">AWD%</th></>
                     ) : (
                       <><th className="td-num" title="Total Unique Reach">Reach</th><th className="td-num">Clicks</th><th className="td-num" title="Click-Through Rate">CTR</th><th className="td-num" title="Cost Per Mille (Cost Per Thousand Impressions)">CPM</th><th className="td-num" title="Cost Per Click">CPC</th><th className="td-num">Leads</th><th className="td-num" title="Number of days the campaign has been or was running">Days</th></>
                     )}
@@ -591,7 +614,13 @@ export default function TOFUPage() {
                       const vCPV = v.video_views > 0 ? v.spend / v.video_views : 0;
                       const vComplRate = v.video_views > 0 ? v.video_completions / v.video_views : 0;
                       const vDepth = v.video_views > 0
-                        ? (v.video_q1 * 0.25 + v.video_q2 * 0.50 + v.video_q3 * 0.75 + v.video_completions * 1.0) / v.video_views
+                        ? (
+                            (v.video_views        - v.video_q1)          * 0.125 +
+                            (v.video_q1           - v.video_q2)          * 0.375 +
+                            (v.video_q2           - v.video_q3)          * 0.625 +
+                            (v.video_q3           - v.video_completions) * 0.875 +
+                             v.video_completions                          * 1.0
+                          ) / v.video_views
                         : 0;
                       return (
                         <tr key={c.id}>
@@ -599,18 +628,16 @@ export default function TOFUPage() {
                           <td><span className={`objective-tag objective-${c.objective.toLowerCase().replace(' ', '-')}`}>{c.objective}</span></td>
                           <td><Badge status={c.status} /></td>
                           <td className="td-nowrap td-num">{c.ad_count}</td>
-                          <td className="td-nowrap td-num">{formatEUR(v.spend || spend)}</td>
-                          <td className="td-nowrap td-num">{formatNumber(vImpr)}</td>
                           <td className="td-nowrap td-num">{formatNumber(v.video_views)}</td>
                           <td className="td-nowrap td-num">{formatPercent(vViewRate)}</td>
                           <td className="td-nowrap td-num">{formatNumber(v.video_starts)}</td>
                           <td className="td-nowrap td-num">{formatNumber(v.video_q1)}</td>
                           <td className="td-nowrap td-num">{formatNumber(v.video_q2)}</td>
                           <td className="td-nowrap td-num">{formatNumber(v.video_q3)}</td>
+                          <td className="td-nowrap td-num">{formatNumber(v.video_completions)}</td>
                           <td className="td-nowrap td-num">{formatPercent(vComplRate)}</td>
                           <td className="td-nowrap td-num">{formatEUR(vCPV)}</td>
                           <td className="td-nowrap td-num">{formatPercent(vDepth)}</td>
-                          <td className="td-nowrap td-num">{days}</td>
                         </tr>
                       );
                     }
@@ -803,12 +830,14 @@ export default function TOFUPage() {
                     <th className="hide-sm" onClick={() => handleSort('status')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
                       Status{renderSortIndicator('status')}
                     </th>
+                    {!(isVideoObjective && videoMetricMode === 'video') && (<>
                     <th className="th-num" onClick={() => handleSort('spend_eur')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Spend in Euros">
                       Spend{renderSortIndicator('spend_eur')}
                     </th>
                     <th className="th-num" onClick={() => handleSort('impressions')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Delivered Impressions">
                       Impr{renderSortIndicator('impressions')}
                     </th>
+                    </>)}
 
                     {isVideoObjective ? (
                       videoMetricMode === 'video' ? (
@@ -829,12 +858,13 @@ export default function TOFUPage() {
                           <th className="th-num-xs hide-md metric-swap-cell" onClick={() => handleSort('video_third_quartile_completions')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="75% of video watched">
                             75%{renderSortIndicatorAd('video_third_quartile_completions')}
                           </th>
-                          <th className="th-num-xs metric-swap-cell" onClick={() => handleSort('video_completions')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Completion Rate (100% watched)">
-                            CR%{renderSortIndicatorAd('video_completions')}
+                          <th className="th-num-xs metric-swap-cell" onClick={() => handleSort('video_completions')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Video Completions — count of viewers who watched 100%">
+                            100%{renderSortIndicatorAd('video_completions')}
                           </th>
+                          <th className="th-num-xs metric-swap-cell" style={{ whiteSpace: 'nowrap' }} title="Completion Rate (completions / video views)">CR%</th>
                           <th className="th-num-xs metric-swap-cell" style={{ whiteSpace: 'nowrap' }} title="Cost Per View">CPV</th>
                           <th className="th-num-xs metric-swap-cell" onClick={() => handleSort('avg_watch_depth')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Avg Watch Depth — weighted average of quartile milestones relative to video starts">
-                            Avg Depth{renderSortIndicatorAd('avg_watch_depth')}
+                            AWD%{renderSortIndicatorAd('avg_watch_depth')}
                           </th>
                         </>
                       ) : (
@@ -887,9 +917,11 @@ export default function TOFUPage() {
                         </th>
                       </>
                     )}
+                    {!(isVideoObjective && videoMetricMode === 'video') && (
                     <th className="th-num-xs" onClick={() => handleSort('days_running')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Days running">
                       Days{renderSortIndicatorAd('days_running')}
                     </th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -941,8 +973,10 @@ export default function TOFUPage() {
                         </td>
 
                         <td className="td-nowrap hide-sm">{row.status ? <Badge status={row.status === 'ACTIVE' ? 'ACTIVE' : row.status === 'COMPLETED' ? 'COMPLETED' : 'PAUSED'} /> : <span className="td-dash">—</span>}</td>
+                        {!(isVideoObjective && videoMetricMode === 'video') && (<>
                         <td className="td-nowrap td-num">{formatEUR(row.spend_eur)}</td>
                         <td className="td-nowrap td-num">{formatNumber(row.impressions)}</td>
+                        </>)}
 
                         {isVideoObjective ? (
                           videoMetricMode === 'video' ? (() => {
@@ -953,7 +987,6 @@ export default function TOFUPage() {
                             const vQ3 = row.video_third_quartile_completions ?? 0;
                             const vCompl = row.video_completions ?? 0;
                             const vViewRate = row.impressions > 0 ? vViews / row.impressions : 0;
-                            const vComplRate = vViews > 0 ? vCompl / vViews : 0;
                             const vCPV = vViews > 0 ? row.spend_eur / vViews : 0;
                             const vDepth = row.avg_watch_depth ?? 0;
                             return (<>
@@ -963,7 +996,8 @@ export default function TOFUPage() {
                               <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ1)}</td>
                               <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ2)}</td>
                               <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ3)}</td>
-                              <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vComplRate)}</td>
+                              <td className="td-nowrap td-num metric-swap-cell">{formatNumber(vCompl)}</td>
+                              <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vViews > 0 ? vCompl / vViews : 0)}</td>
                               <td className="td-nowrap td-num metric-swap-cell">{formatEUR(vCPV)}</td>
                               <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vDepth)}</td>
                             </>);
@@ -985,7 +1019,7 @@ export default function TOFUPage() {
                           <td className="td-nowrap td-num hide-md">{formatNumber(row.engagements)}</td>
                           <td className="td-nowrap td-num hide-lg">{formatNumber(row.landing_page_clicks)}</td>
                         </>)}
-                        <td className="td-nowrap td-num">{formatDays(row.days_running)}</td>
+                        {!(isVideoObjective && videoMetricMode === 'video') && <td className="td-nowrap td-num">{formatDays(row.days_running)}</td>}
                       </tr>
                     );
                   })}
@@ -1056,8 +1090,10 @@ export default function TOFUPage() {
                     <th className="hide-md" style={{ width: 88 }}>Asset ID</th>
                     <th>Ad Name</th>
                     <th className="hide-sm">Status</th>
+                    {!(isVideoObjective && videoMetricMode === 'video') && (<>
                     <th className="th-num" title="Total Spend in Euros">Spend</th>
                     <th className="th-num" title="Total Delivered Impressions">Impr.</th>
+                    </>)}
                     {isVideoObjective ? (
                       videoMetricMode === 'video' ? (
                         <>
@@ -1067,10 +1103,11 @@ export default function TOFUPage() {
                           <th className="th-num-xs hide-md metric-swap-cell" title="25% of video watched">25%</th>
                           <th className="th-num-xs hide-md metric-swap-cell" title="50% of video watched">50%</th>
                           <th className="th-num-xs hide-md metric-swap-cell" title="75% of video watched">75%</th>
-                          <th className="th-num-xs metric-swap-cell" title="Completion Rate (100% watched)">CR%</th>
-                          <th className="th-num-xs metric-swap-cell" title="Cost Per View">CPV</th>
-                          <th className="th-num-xs metric-swap-cell" title="Avg Watch Depth — weighted average of quartile milestones relative to video starts">Avg Depth</th>
-                        </>
+                           <th className="th-num-xs metric-swap-cell" title="Video Completions — count of viewers who watched 100%">100%</th>
+                           <th className="th-num-xs metric-swap-cell" title="Completion Rate (completions / video views)">CR%</th>
+                           <th className="th-num-xs metric-swap-cell" title="Cost Per View">CPV</th>
+                           <th className="th-num-xs metric-swap-cell" title="Avg Watch Depth — incremental band estimate of average percentage of video watched">AWD%</th>
+                         </>
                       ) : (
                         <>
                           <th className="th-num hide-lg metric-swap-cell" title="Total Unique Reach">Reach</th>
@@ -1134,8 +1171,10 @@ export default function TOFUPage() {
                           )}
                         </td>
                         <td className="td-nowrap hide-sm">{row.status ? <Badge status={row.status === 'ACTIVE' ? 'ACTIVE' : row.status === 'COMPLETED' ? 'COMPLETED' : 'PAUSED'} /> : <span className="td-dash">—</span>}</td>
+                        {!(isVideoObjective && videoMetricMode === 'video') && (<>
                         <td className="td-nowrap td-num">{formatEUR(spend)}</td>
                         <td className="td-nowrap td-num">{formatNumber(impressions)}</td>
+                        </>)}
                         {isVideoObjective ? (
                           videoMetricMode === 'video' ? (() => {
                             const vViews = row.video_views ?? 0;
@@ -1145,11 +1184,16 @@ export default function TOFUPage() {
                             const vQ3 = row.video_third_quartile_completions ?? 0;
                             const vCompl = row.video_completions ?? 0;
                             const vViewRate = impressions > 0 ? vViews / impressions : 0;
-                            const vComplRate = vViews > 0 ? vCompl / vViews : 0;
                             const vCPV = vViews > 0 ? spend / vViews : 0;
                             const vDepth = vViews > 0
-                              ? (vQ1 * 0.25 + vQ2 * 0.50 + vQ3 * 0.75 + vCompl * 1.0) / vViews
-                              : 0;
+                               ? (
+                                   (vViews  - vQ1)    * 0.125 +
+                                   (vQ1     - vQ2)    * 0.375 +
+                                   (vQ2     - vQ3)    * 0.625 +
+                                   (vQ3     - vCompl) * 0.875 +
+                                    vCompl            * 1.0
+                                 ) / vViews
+                               : 0;
                             return (<>
                               <td className="td-nowrap td-num metric-swap-cell">{formatNumber(vViews)}</td>
                               <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vViewRate)}</td>
@@ -1157,7 +1201,8 @@ export default function TOFUPage() {
                               <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ1)}</td>
                               <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ2)}</td>
                               <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ3)}</td>
-                              <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vComplRate)}</td>
+                              <td className="td-nowrap td-num metric-swap-cell">{formatNumber(vCompl)}</td>
+                              <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vViews > 0 ? vCompl / vViews : 0)}</td>
                               <td className="td-nowrap td-num metric-swap-cell">{formatEUR(vCPV)}</td>
                               <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vDepth)}</td>
                             </>);
