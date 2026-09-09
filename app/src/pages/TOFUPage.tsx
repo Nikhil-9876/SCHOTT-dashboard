@@ -240,11 +240,19 @@ export default function TOFUPage() {
     return data.map(c => ({ ...c, objective: detectObjective(c.name) }));
   }, [data]);
 
-  // ── Filter by objective ─────────────────────────────────────────────────
+  // ── Fixed objective display order ───────────────────────────────────────
+  const OBJECTIVE_ORDER: Exclude<Objective, 'All'>[] = ['Awareness', 'Engagement', 'Video Views', 'Website Visits'];
+
+  // ── Filter by objective + sort by funnel order ──────────────────────────
   const filteredCampaigns = useMemo(() => {
-    if (selectedObjective === 'All') return campaignsWithObjective;
-    return campaignsWithObjective.filter(c => c.objective === selectedObjective);
+    const list = selectedObjective === 'All'
+      ? campaignsWithObjective
+      : campaignsWithObjective.filter(c => c.objective === selectedObjective);
+    return [...list].sort(
+      (a, b) => OBJECTIVE_ORDER.indexOf(a.objective) - OBJECTIVE_ORDER.indexOf(b.objective),
+    );
   }, [campaignsWithObjective, selectedObjective]);
+
 
   // ── Campaign name lookup map (for ad table) ─────────────────────────────
   const campaignNameMap = useMemo<Record<string, string>>(() => {

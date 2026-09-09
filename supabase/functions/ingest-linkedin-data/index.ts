@@ -75,15 +75,24 @@ function getAnalyticsLookbackDays() {
 
 const MIN_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
+// ── Demographics sync cadence ─────────────────────────────────────────────────
+// Demographics change slowly; syncing them every 7 days is sufficient.
+// On daily quick syncs this saves 5 × N_campaigns LinkedIn API round-trips.
+const DEMO_SYNC_INTERVAL_DAYS = 7;
+
 async function getIngestionTrigger(req: Request) {
   try {
     const payload = await req.clone().json();
     return {
       trigger: payload?.trigger === 'manual' ? 'manual' : 'scheduled',
       isFullSync: Boolean(payload?.full),
+      forceDemographics: Boolean(payload?.demographics),
+      backfillDays: Number.isFinite(Number(payload?.backfill_days)) && Number(payload?.backfill_days) > 0
+        ? Math.min(Math.floor(Number(payload.backfill_days)), 90) // LinkedIn reach limit: 90 days
+        : null,
     };
   } catch {
-    return { trigger: 'scheduled', isFullSync: false };
+    return { trigger: 'scheduled', isFullSync: false, forceDemographics: false, backfillDays: null };
   }
 }
 
@@ -240,7 +249,6 @@ async function fetchCreatives(adAccountId: string, campaignUrn: string, headers:
 
     const creativesData = await creativesRes.json();
     for (const rawCreative of (creativesData.elements || [])) {
-      console.log(`[debug-creative] ${rawCreative.id}:`, JSON.stringify(rawCreative));
       const creativeId = String(rawCreative.id);
       const rawStatus = rawCreative.status ?? rawCreative.intendedStatus ?? null;
       const content = rawCreative.content as Record<string, unknown> | undefined;
@@ -457,6 +465,56 @@ const CREATIVE_ANALYTICS_FIELDS = [
   'videoThirdQuartileCompletions',
 ];
 
+// ── OPTIMIZATION 2: Batch campaign analytics ─────────────────────────────────
+// Fetches analytics for ALL campaign URNs in a single LinkedIn API call.
+// Returns a Map<campaignUrn, analyticsElementsArray>.
+async function fetchBatchCampaignAnalytics(
+  campaignUrns: string[],
+  dateRangeQuery: string,
+  headers: Record<string, string>,
+): Promise<Map<string, Record<string, unknown>[]>> {
+  const result = new Map<string, Record<string, unknown>[]>();
+  if (campaignUrns.length === 0) return result;
+
+  const extendedFields = [...BASE_CAMPAIGN_ANALYTICS_FIELDS, ...LEAD_FORM_ANALYTICS_FIELDS];
+  const campaignsList = campaignUrns.map(encodeURIComponent).join(',');
+
+  const tryFetch = async (fields: string[]) => {
+    const params = [
+      'q=analytics',
+      'pivot=CAMPAIGN',
+      `dateRange=${dateRangeQuery}`,
+      'timeGranularity=DAILY',
+      `campaigns=List(${campaignsList})`,
+      `fields=${fields.join(',')}`,
+    ];
+    const url = `https://api.linkedin.com/rest/adAnalytics?${params.join('&')}`;
+    return fetch(url, { headers });
+  };
+
+  let res = await tryFetch(extendedFields);
+  if (!res.ok) {
+    const errText = await res.text();
+    console.warn(`Batch analytics (extended fields) failed: ${errText}. Retrying with base fields.`);
+    res = await tryFetch(BASE_CAMPAIGN_ANALYTICS_FIELDS);
+  }
+
+  if (!res.ok) {
+    console.warn(`Batch analytics failed entirely: ${await res.text()}`);
+    return result;
+  }
+
+  const json = await res.json();
+  for (const el of (json.elements ?? []) as Record<string, unknown>[]) {
+    const pivotValues = el.pivotValues as string[] | undefined;
+    const urn = pivotValues?.[0];
+    if (!urn) continue;
+    if (!result.has(urn)) result.set(urn, []);
+    result.get(urn)!.push(el);
+  }
+  return result;
+}
+
 function buildAnalyticsUrl(campaignUrn: string, dateRangeQuery: string, fields: string[]) {
   const params = [
     'q=analytics',
@@ -470,17 +528,52 @@ function buildAnalyticsUrl(campaignUrn: string, dateRangeQuery: string, fields: 
   return `https://api.linkedin.com/rest/adAnalytics?${params.join('&')}`;
 }
 
-function buildCreativeAnalyticsUrl(creativeUrn: string, dateRangeQuery: string) {
-  const params = [
-    'q=analytics',
-    'pivot=CREATIVE',
-    `dateRange=${dateRangeQuery}`,
-    'timeGranularity=DAILY',
-    `creatives=List(${encodeURIComponent(creativeUrn)})`,
-    `fields=${CREATIVE_ANALYTICS_FIELDS.join(',')}`,
-  ];
+// ── OPTIMIZATION 2b: Batch creative analytics ────────────────────────────────
+// Fetches analytics for ALL creative URNs in a single LinkedIn API call.
+// LinkedIn supports up to 20 creatives per request via creatives=List(...).
+// Returns a Map<creativeUrn, analyticsElementsArray>.
+async function fetchBatchCreativeAnalytics(
+  creativeUrns: string[],
+  dateRangeQuery: string,
+  headers: Record<string, string>,
+): Promise<Map<string, Record<string, unknown>[]>> {
+  const result = new Map<string, Record<string, unknown>[]>();
+  if (creativeUrns.length === 0) return result;
 
-  return `https://api.linkedin.com/rest/adAnalytics?${params.join('&')}`;
+  // LinkedIn limits List() params — batch in chunks of 20 to be safe
+  const BATCH_SIZE = 20;
+  const chunks: string[][] = [];
+  for (let i = 0; i < creativeUrns.length; i += BATCH_SIZE) {
+    chunks.push(creativeUrns.slice(i, i + BATCH_SIZE));
+  }
+
+  await Promise.all(chunks.map(async (chunk) => {
+    const creativesList = chunk.map(encodeURIComponent).join(',');
+    const params = [
+      'q=analytics',
+      'pivot=CREATIVE',
+      `dateRange=${dateRangeQuery}`,
+      'timeGranularity=DAILY',
+      `creatives=List(${creativesList})`,
+      `fields=${CREATIVE_ANALYTICS_FIELDS.join(',')}`,
+    ];
+    const url = `https://api.linkedin.com/rest/adAnalytics?${params.join('&')}`;
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      console.warn(`Batch creative analytics failed: ${await res.text()}`);
+      return;
+    }
+    const json = await res.json();
+    for (const el of (json.elements ?? []) as Record<string, unknown>[]) {
+      const pivotValues = el.pivotValues as string[] | undefined;
+      const urn = pivotValues?.[0];
+      if (!urn) continue;
+      if (!result.has(urn)) result.set(urn, []);
+      result.get(urn)!.push(el);
+    }
+  }));
+
+  return result;
 }
 
 // ── Demographic pivot support ─────────────────────────────────────────────────
@@ -627,8 +720,6 @@ const LINKEDIN_GEO_TO_ISO2: Record<string, string> = {
   '105072282': 'NG', // Nigeria
   '103323778': 'KE', // Kenya
   '101736903': 'SA', // Saudi Arabia
-  '105646813': 'ES', // Spain
-  '100565514': 'BE', // Belgium
   '102304179': 'NZ', // New Zealand
   '101282718': 'UA', // Ukraine
   '103744681': 'GR', // Greece
@@ -637,10 +728,8 @@ const LINKEDIN_GEO_TO_ISO2: Record<string, string> = {
   '101168310': 'BG', // Bulgaria
   '101768798': 'RS', // Serbia
   '103440316': 'LT', // Lithuania
-  '104514075': 'DK', // Denmark
   '102974008': 'PK', // Pakistan
   '106448360': 'BD', // Bangladesh
-  '101452733': 'AU', // Australia
   '100878084': 'VN', // Vietnam
   '100731978': 'QA', // Qatar
   '103116394': 'KW', // Kuwait
@@ -813,24 +902,6 @@ async function fetchAndStoreDemographics(
   }));
 }
 
-async function fetchCampaignAnalytics(campaignUrn: string, dateRangeQuery: string, headers: Record<string, string>) {
-  const extendedFields = [...BASE_CAMPAIGN_ANALYTICS_FIELDS, ...LEAD_FORM_ANALYTICS_FIELDS];
-  const extendedResponse = await fetch(buildAnalyticsUrl(campaignUrn, dateRangeQuery, extendedFields), { headers });
-  if (extendedResponse.ok) {
-    return extendedResponse;
-  }
-
-  const extendedError = await extendedResponse.text();
-  console.warn(`Failed to fetch extended campaign analytics for ${campaignUrn}: ${extendedError}`);
-
-  const baseResponse = await fetch(buildAnalyticsUrl(campaignUrn, dateRangeQuery, BASE_CAMPAIGN_ANALYTICS_FIELDS), { headers });
-  if (!baseResponse.ok) {
-    console.warn(`Failed to fetch campaign analytics for ${campaignUrn}: ${await baseResponse.text()}`);
-  }
-
-  return baseResponse;
-}
-
 function getNumberMetric(stat: Record<string, unknown>, key: string) {
   return Number(stat[key] ?? 0) || 0;
 }
@@ -874,12 +945,13 @@ serve(async (req) => {
     }
 
     const now = new Date();
-    const { trigger: ingestionTrigger, isFullSync } = await getIngestionTrigger(req);
+    const { trigger: ingestionTrigger, isFullSync, forceDemographics, backfillDays } = await getIngestionTrigger(req);
     const isManualSync = ingestionTrigger === 'manual';
+    const isBackfill = backfillDays !== null;
 
     const { data: lastSuccessLog, error: lastSuccessError } = await supabaseClient
       .from('ingestion_log')
-      .select('started_at, finished_at')
+      .select('started_at, finished_at, refreshed_campaigns')
       .eq('status', 'success')
       .order('finished_at', { ascending: false, nullsFirst: false })
       .order('started_at', { ascending: false })
@@ -889,7 +961,7 @@ serve(async (req) => {
     if (lastSuccessError) throw new Error(`Failed to read sync log: ${lastSuccessError.message}`);
 
     const lastSuccessfulSyncAt = isFullSync ? null : getLastSyncTimestamp(lastSuccessLog);
-    if (!isManualSync && lastSuccessfulSyncAt && now.getTime() - lastSuccessfulSyncAt.getTime() < MIN_SYNC_INTERVAL_MS) {
+    if (!isManualSync && !isBackfill && lastSuccessfulSyncAt && now.getTime() - lastSuccessfulSyncAt.getTime() < MIN_SYNC_INTERVAL_MS) {
       const nextSyncAt = new Date(lastSuccessfulSyncAt.getTime() + MIN_SYNC_INTERVAL_MS);
       return new Response(JSON.stringify({
         error: `Last sync should be 24 hours apart. Please try again after ${nextSyncAt.toISOString()}.`,
@@ -900,9 +972,33 @@ serve(async (req) => {
       });
     }
 
+    // ── OPTIMIZATION 1: Decide whether to sync demographics ──────────────────
+    // Skip demographics on daily quick syncs; only refresh weekly or when forced.
+    const { data: lastDemoLog } = await supabaseClient
+      .from('ingestion_log')
+      .select('finished_at')
+      .eq('status', 'success')
+      .eq('synced_demographics', true)
+      .order('finished_at', { ascending: false, nullsFirst: false })
+      .limit(1)
+      .maybeSingle();
+
+    const lastDemoSyncAt = lastDemoLog?.finished_at ? new Date(lastDemoLog.finished_at) : null;
+    const daysSinceLastDemoSync = lastDemoSyncAt
+      ? (now.getTime() - lastDemoSyncAt.getTime()) / (1000 * 60 * 60 * 24)
+      : Infinity;
+
+    const shouldSyncDemographics = forceDemographics || isFullSync || daysSinceLastDemoSync >= DEMO_SYNC_INTERVAL_DAYS;
+
+    // If backfill_days is provided, override the date range to that window.
+    // This is the recovery path for lost metrics (e.g. reach data).
     const analyticsLookbackDays = getAnalyticsLookbackDays();
-    const { startDate, endDate } = getSyncDateRange(lastSuccessfulSyncAt, now, analyticsLookbackDays);
+    const { startDate, endDate } = isBackfill
+      ? { startDate: addUtcDays(startOfUtcDay(now), -backfillDays!), endDate: startOfUtcDay(now) }
+      : getSyncDateRange(isFullSync ? null : lastSuccessfulSyncAt, now, analyticsLookbackDays);
     const dateRangeQuery = buildDateRangeQuery(startDate, endDate);
+    console.log(`[sync] date range: ${startDate.toISOString().slice(0, 10)} → ${endDate.toISOString().slice(0, 10)}${isBackfill ? ` (backfill ${backfillDays}d)` : ''}`);
+
 
     // 2. Insert ingestion log (Running)
     const { data: logData, error: logError } = await supabaseClient
@@ -944,24 +1040,71 @@ serve(async (req) => {
       const adAccountId = getRequiredAdAccountId();
       const campaignNameIncludes = getCampaignNameIncludes();
 
-      // 5. Fetch Campaigns for the Ad Account
-      const campaigns: { id: string | number; name?: string; status?: string }[] = [];
-      let pageToken: string | null = null;
+      // 5. Fetch Campaigns — from DB cache on quick syncs, from LinkedIn on full/weekly syncs.
+      //    The campaign list rarely changes. Fetching it from LinkedIn takes ~16s due to API
+      //    latency over a large account. Re-fetching from LinkedIn on full syncs or once per week
+      //    (Sunday 23:30 UTC = Monday 5:00am IST via pg_cron) keeps the list fresh.
+      const CAMPAIGN_LIST_CACHE_DAYS = 7;
 
-      do {
-        const campaignsRes = await fetch(buildCampaignsUrl(adAccountId, pageToken), { headers: apiHeaders });
-        if (!campaignsRes.ok) throw new Error(`Failed to fetch campaigns: ${await campaignsRes.text()}`);
-        const campaignsData = await campaignsRes.json();
+      // Use the timestamp of the last sync that actually fetched campaigns from LinkedIn.
+      // This is tracked via the refreshed_campaigns column — independent of daily sync cadence.
+      const { data: lastCampaignRefreshLog } = await supabaseClient
+        .from('ingestion_log')
+        .select('finished_at')
+        .eq('status', 'success')
+        .eq('refreshed_campaigns', true)
+        .order('finished_at', { ascending: false, nullsFirst: false })
+        .limit(1)
+        .maybeSingle();
 
-        campaigns.push(...(campaignsData.elements || []));
-        pageToken = campaignsData.metadata?.nextPageToken ?? null;
-      } while (pageToken);
+      const lastCampaignRefreshAt = lastCampaignRefreshLog?.finished_at
+        ? new Date(lastCampaignRefreshLog.finished_at)
+        : null;
+      const daysSinceLastCampaignRefresh = lastCampaignRefreshAt
+        ? (now.getTime() - lastCampaignRefreshAt.getTime()) / (1000 * 60 * 60 * 24)
+        : 0; // null means "no tracking history yet" → default to using DB cache
+
+      // Refresh from LinkedIn only on explicit full syncs or when 7-day clock expires.
+      // If no history exists (lastCampaignRefreshAt = null), use DB campaigns — this
+      // handles legacy rows before the refreshed_campaigns column was added.
+      const shouldRefreshCampaigns = isFullSync
+        || (lastCampaignRefreshAt !== null && daysSinceLastCampaignRefresh >= CAMPAIGN_LIST_CACHE_DAYS);
+
+
+      const tCampaignsFetch = Date.now();
+      let campaignsFetchPages = 0;
+      let campaigns: { id: string | number; name?: string; status?: string }[] = [];
+
+      if (!shouldRefreshCampaigns) {
+        // Quick sync: read campaigns from DB (already filtered from last full fetch)
+        const { data: dbCamps } = await supabaseClient
+          .from('campaigns')
+          .select('linkedin_id, name, status')
+          .eq('ad_account_id', adAccountId);
+        campaigns = (dbCamps ?? []).map((c) => ({ id: c.linkedin_id, name: c.name, status: c.status }));
+        console.log(`[timing] campaigns from DB cache: ${Date.now() - tCampaignsFetch}ms (${campaigns.length} campaigns)`);
+      } else {
+        // Full or weekly sync: fetch from LinkedIn API (may take 10-20s for large accounts)
+        let pageToken: string | null = null;
+        do {
+          const campaignsRes = await fetch(buildCampaignsUrl(adAccountId, pageToken), { headers: apiHeaders });
+          if (!campaignsRes.ok) throw new Error(`Failed to fetch campaigns: ${await campaignsRes.text()}`);
+          const campaignsData = await campaignsRes.json();
+          campaigns.push(...(campaignsData.elements || []));
+          pageToken = campaignsData.metadata?.nextPageToken ?? null;
+          campaignsFetchPages++;
+        } while (pageToken);
+        console.log(`[timing] campaigns from LinkedIn: ${Date.now() - tCampaignsFetch}ms (${campaignsFetchPages} page(s), ${campaigns.length} total)`);
+        // Mark this sync as a campaign refresh so the weekly cadence tracks correctly
+        await supabaseClient.from('ingestion_log').update({ refreshed_campaigns: true }).eq('id', logId);
+      }
+      const timing_campaigns_ms = Date.now() - tCampaignsFetch;
 
       const campaignNameExcludes = getCampaignNameExcludes();
 
+
       // ── Naming convention enforcement ────────────────────────────────────────
-      // Accepted campaigns MUST follow the convention: YYYY/MM/DD_REGION_FunnelStage_...
-      // e.g. "2026/07/01_APAC_ToFu_IN_P_PharmaTubing_FIOLAX-T_pharma-tubings_vv_2026/08/02_videoads"
+      // Accepted campaigns MUST follow the convention: YYYY/MM/DD_REGION_FunnelStage_...,
       // Campaigns that do not start with YYYY/MM/DD_ are rejected outright.
       // The date prefix is also used for the 2026-07-01 start-date cutoff.
       const CAMPAIGN_START_CUTOFF = new Date('2026-07-01T00:00:00Z').getTime();
@@ -1016,8 +1159,7 @@ serve(async (req) => {
 
       // Delete campaigns that are in the DB for this ad account but did NOT pass the
       // current filters (name include/exclude + date cutoff). This purges previously-synced
-      // campaigns that no longer belong in the dashboard (e.g. old "Video views" campaigns
-      // that were ingested before the cutoff filter was added).
+      // campaigns that no longer belong in the dashboard.
       const filteredLinkedInIds = filteredCampaigns.map((c) => String(c.id));
       if (filteredLinkedInIds.length > 0) {
         await supabaseClient
@@ -1035,33 +1177,87 @@ serve(async (req) => {
 
       let campaignsUpdated = 0;
 
-      // Pre-load all existing thumbnail_urls to avoid re-downloading on every sync
-      const { data: existingThumbRows } = await supabaseClient
-        .from('ad_performance_metrics')
-        .select('creative_id, thumbnail_url')
-        .not('thumbnail_url', 'is', null);
-      const thumbCache = new Map<string, string>(
-        (existingThumbRows ?? []).map((r: { creative_id: string; thumbnail_url: string }) => [r.creative_id, r.thumbnail_url])
+      // ── GLOBAL PARALLEL PHASE ────────────────────────────────────────────────
+      // Fire ALL top-level LinkedIn API calls simultaneously before any per-campaign
+      // work begins. This collapses the sequential chain into a single parallel wave:
+      //   (a) Batch campaign analytics  — 1 LinkedIn call
+      //   (b) fetchCreatives ×N         — N LinkedIn calls (one per campaign, all parallel)
+      //   (c) Creative cache DB query   — 1 Supabase call
+      // All run concurrently; total time = max(a, b, c) instead of a + b + c.
+      const tGlobal = Date.now();
+      const filteredCampaignUrns = filteredCampaigns.map((c) => toLinkedInUrn(String(c.id), 'sponsoredCampaign'));
+
+      const [batchAnalyticsMap, allCampaignCreatives, existingCreativeRows] = await Promise.all([
+        fetchBatchCampaignAnalytics(filteredCampaignUrns, dateRangeQuery, apiHeaders),
+        // Fetch creatives for ALL campaigns in parallel
+        Promise.all(filteredCampaigns.map((rawCamp) =>
+          fetchCreatives(adAccountId, toLinkedInUrn(String(rawCamp.id), 'sponsoredCampaign'), apiHeaders)
+        )),
+        supabaseClient
+          .from('ad_performance_metrics')
+          .select('creative_id, thumbnail_url, creative_url, reference')
+          .not('creative_url', 'is', null)
+          .then((r) => r.data),
+      ]);
+      console.log(`[timing] global parallel phase: ${Date.now() - tGlobal}ms`);
+      const timing_phase1_ms = Date.now() - tGlobal;
+
+      // Build per-campaign creatives map for use in campaign tasks
+      const campaignCreativesMap = new Map<string, typeof allCampaignCreatives[0]>(
+        filteredCampaigns.map((rawCamp, i) => [String(rawCamp.id), allCampaignCreatives[i]])
       );
 
-      // Process each campaign: fetch creatives + analytics + demographics in parallel.
-      // Up to 4 campaigns are processed concurrently to stay within LinkedIn rate limits.
-      const CAMPAIGN_CONCURRENCY = 4;
+      // Now fire ALL batch creative analytics calls in parallel (one per campaign)
+      const tCreativeAnalytics = Date.now();
+      const creativeAnalyticsByLinkedInId = new Map<string, Map<string, Record<string, unknown>[]>>();
+      await Promise.all(filteredCampaigns.map(async (rawCamp) => {
+        const campaignId = String(rawCamp.id);
+        const creatives = campaignCreativesMap.get(campaignId) ?? [];
+        const creativeUrns = creatives.map((c) => toLinkedInUrn(c.id, 'sponsoredCreative'));
+        const analyticsMap = await fetchBatchCreativeAnalytics(creativeUrns, dateRangeQuery, apiHeaders);
+        creativeAnalyticsByLinkedInId.set(campaignId, analyticsMap);
+      }));
+      console.log(`[timing] all creative analytics batch: ${Date.now() - tCreativeAnalytics}ms`);
+      const timing_phase2_ms = Date.now() - tCreativeAnalytics;
+
+      const knownCreativeCache = new Map<string, { thumbnail_url: string | null; creative_url: string; reference: string | null }>();
+      for (const row of (existingCreativeRows ?? [])) {
+        if (!knownCreativeCache.has(row.creative_id)) {
+          knownCreativeCache.set(row.creative_id, {
+            thumbnail_url: row.thumbnail_url,
+            creative_url: row.creative_url,
+            reference: row.reference,
+          });
+        }
+      }
+
+      // Thumbnail-only cache for creatives with known thumbnails
+      const thumbCache = new Map<string, string>(
+        [...knownCreativeCache.entries()]
+          .filter(([, v]) => v.thumbnail_url)
+          .map(([id, v]) => [id, v.thumbnail_url!])
+      );
+
+      // Process each campaign: DB upserts + thumbnail fetches for new creatives only.
+      // All LinkedIn API calls already completed above.
+      const CAMPAIGN_CONCURRENCY = 6;
+
 
       const campaignTasks = filteredCampaigns.map((rawCamp) => async () => {
         const campaignId = String(rawCamp.id);
         const campaignName = String(rawCamp.name ?? `LinkedIn campaign ${campaignId}`);
         const campaignUrn = toLinkedInUrn(campaignId, 'sponsoredCampaign');
 
-        // Fetch creatives and campaign analytics concurrently
-        const [creatives, analyticsRes] = await Promise.all([
-          fetchCreatives(adAccountId, campaignUrn, apiHeaders),
-          fetchCampaignAnalytics(campaignUrn, dateRangeQuery, apiHeaders),
-        ]);
+        const isVideoCampaign = campaignName.toLowerCase().includes('_vv_') || campaignName.toLowerCase().includes('video');
+
+        // All LinkedIn API data already fetched above — just read from pre-built maps
+        const creatives = campaignCreativesMap.get(campaignId) ?? [];
         const adCount = creatives.length;
+        const batchCreativeAnalyticsMap = creativeAnalyticsByLinkedInId.get(campaignId) ?? new Map();
 
         // Cache of assetUrn → video duration in seconds (fetched once per creative, reused across daily rows)
         const videoDurationCache = new Map<string, number | null>();
+
 
         // Map LinkedIn statuses to DB constraint: 'ACTIVE' | 'COMPLETED' | 'PAUSED'
         let mappedStatus: 'ACTIVE' | 'COMPLETED' | 'PAUSED' = 'PAUSED';
@@ -1094,89 +1290,98 @@ serve(async (req) => {
 
         if (upsertErr || !dbCampaign) return false;
 
-        // 6. Store campaign-level daily analytics metrics.
-        if (analyticsRes.ok) {
-          const analyticsData = await analyticsRes.json();
-          const campaignMetricRows = (analyticsData.elements || []).map((stat: Record<string, unknown>) => {
-            const dr = stat.dateRange as Record<string, Record<string, number>>;
-            const dateStart = `${dr.start.year}-${String(dr.start.month).padStart(2, '0')}-${String(dr.start.day).padStart(2, '0')}`;
-            const dateEnd = `${dr.end.year}-${String(dr.end.month).padStart(2, '0')}-${String(dr.end.day).padStart(2, '0')}`;
-            const impressions = Number(stat.impressions) || 0;
-            const clicks = Number(stat.clicks) || 0;
-            const spend = Number(stat.costInLocalCurrency) || 0;
-            const reach = getReach(stat);
-            const leads = getLeadCount(stat);
-            const cpm = impressions > 0 ? (spend / impressions) * 1000 : 0;
-            const cpc = clicks > 0 ? spend / clicks : 0;
-            const cpl = leads > 0 ? spend / leads : 0;
-            return {
-              campaign_id: dbCampaign.id,
-              date_range_start: dateStart,
-              date_range_end: dateEnd,
-              impressions,
-              reach,
-              clicks,
-              spend_inr: spend,
-              spend_eur: spend,
-              engagement_rate: impressions > 0 ? clicks / impressions : 0,
-              ctr: impressions > 0 ? clicks / impressions : 0,
-              cpm_inr: cpm,
-              cpc_inr: cpc,
-              cpl_inr: cpl,
-              leads,
-            };
-          });
-          if (campaignMetricRows.length > 0) {
-            await supabaseClient
-              .from('campaign_metrics')
-              .upsert(campaignMetricRows, { onConflict: 'campaign_id,date_range_start,date_range_end' });
-          }
+        // 6. Store campaign-level daily analytics metrics (from batched response).
+        const campaignElements = batchAnalyticsMap.get(campaignUrn) ?? [];
+        const campaignMetricRows = campaignElements.map((stat) => {
+          const dr = stat.dateRange as Record<string, Record<string, number>>;
+          const dateStart = `${dr.start.year}-${String(dr.start.month).padStart(2, '0')}-${String(dr.start.day).padStart(2, '0')}`;
+          const dateEnd = `${dr.end.year}-${String(dr.end.month).padStart(2, '0')}-${String(dr.end.day).padStart(2, '0')}`;
+          const impressions = Number(stat.impressions) || 0;
+          const clicks = Number(stat.clicks) || 0;
+          const spend = Number(stat.costInLocalCurrency) || 0;
+          const reach = getReach(stat);
+          const leads = getLeadCount(stat);
+          const cpm = impressions > 0 ? (spend / impressions) * 1000 : 0;
+          const cpc = clicks > 0 ? spend / clicks : 0;
+          const cpl = leads > 0 ? spend / leads : 0;
+          return {
+            campaign_id: dbCampaign.id,
+            date_range_start: dateStart,
+            date_range_end: dateEnd,
+            impressions,
+            reach,
+            clicks,
+            spend_inr: spend,
+            spend_eur: spend,
+            engagement_rate: impressions > 0 ? clicks / impressions : 0,
+            ctr: impressions > 0 ? clicks / impressions : 0,
+            cpm_inr: cpm,
+            cpc_inr: cpc,
+            cpl_inr: cpl,
+            leads,
+          };
+        });
+        if (campaignMetricRows.length > 0) {
+          await supabaseClient
+            .from('campaign_metrics')
+            .upsert(campaignMetricRows, { onConflict: 'campaign_id,date_range_start,date_range_end' });
         }
 
         // 7. Fetch & store creative-level analytics and thumbnails in parallel.
-        //    Each creative fires its analytics request and thumbnail fetch simultaneously.
+        //    Creative analytics already batched above; consume from map per creative.
         await Promise.all(creatives.map(async (creative) => {
           const creativeUrn = toLinkedInUrn(creative.id, 'sponsoredCreative');
-
-          // Fire creative analytics + thumbnail fetch simultaneously
           const effectiveCreativeStatus = creative.status ?? mappedStatus;
-          let thumbnailPromise: Promise<string | null> = Promise.resolve(thumbCache.get(creative.id) ?? creative.direct_image_url ?? null);
-          if (!thumbCache.has(creative.id) && !creative.direct_image_url && creative.reference) {
-            thumbnailPromise = fetchCreativeThumbnail(creative.reference, creative.id, supabaseClient, apiHeaders).then((url) => {
+
+          // OPTIMIZATION 3: Skip thumbnail fetch for known creatives
+          const knownMeta = knownCreativeCache.get(creative.id);
+          const resolvedCreativeUrl = creative.creative_url ?? knownMeta?.creative_url ?? null;
+          const resolvedReference = creative.reference ?? knownMeta?.reference ?? null;
+
+          let thumbnailPromise: Promise<string | null>;
+          if (thumbCache.has(creative.id)) {
+            thumbnailPromise = Promise.resolve(thumbCache.get(creative.id)!);
+          } else if (creative.direct_image_url) {
+            thumbnailPromise = Promise.resolve(creative.direct_image_url);
+          } else if (resolvedReference) {
+            thumbnailPromise = fetchCreativeThumbnail(resolvedReference, creative.id, supabaseClient, apiHeaders).then((url) => {
               if (url) thumbCache.set(creative.id, url);
               return url;
             });
+          } else {
+            thumbnailPromise = Promise.resolve(null);
           }
 
-          const [creativeAnalyticsRes, thumbnailUrl] = await Promise.all([
-            fetch(buildCreativeAnalyticsUrl(creativeUrn, dateRangeQuery), { headers: apiHeaders }),
-            thumbnailPromise,
-          ]);
-
-          // Fetch video duration (once per creative reference, cached).
-          // Works for ugcPost, share, or direct digitalmediaAsset references.
+          // Video duration: only fetch for video campaigns — skipping for WV/document/image ads
+          // avoids 1-2 wasted LinkedIn API calls per non-video creative.
           let videoDurationSeconds: number | null = null;
-          const assetUrn = creative.reference || null;
-          if (assetUrn) {
+          const assetUrn = resolvedReference;
+          let videoDurationPromise: Promise<number | null> = Promise.resolve(null);
+          if (isVideoCampaign && assetUrn) {
             if (videoDurationCache.has(assetUrn)) {
               videoDurationSeconds = videoDurationCache.get(assetUrn) ?? null;
             } else {
-              videoDurationSeconds = await fetchVideoDuration(assetUrn, apiHeaders);
-              videoDurationCache.set(assetUrn, videoDurationSeconds);
-              if (videoDurationSeconds !== null) {
-                console.log(`[video-duration] ✓ ${assetUrn} → ${videoDurationSeconds}s`);
-              }
+              videoDurationPromise = fetchVideoDuration(assetUrn, apiHeaders).then((d) => {
+                videoDurationCache.set(assetUrn, d);
+                if (d !== null) console.log(`[video-duration] ✓ ${assetUrn} → ${d}s`);
+                return d;
+              });
             }
           }
 
-          if (!creativeAnalyticsRes.ok) {
-            console.warn(`Failed to fetch ad analytics for ${creativeUrn}: ${await creativeAnalyticsRes.text()}`);
-            return;
+          const [thumbnailUrl, resolvedVideoDuration] = await Promise.all([
+            thumbnailPromise,
+            videoDurationPromise,
+          ]);
+          if (assetUrn && !videoDurationCache.has(assetUrn)) {
+            videoDurationSeconds = resolvedVideoDuration;
+          } else if (assetUrn) {
+            videoDurationSeconds = videoDurationCache.get(assetUrn) ?? null;
           }
 
-          const creativeAnalyticsData = await creativeAnalyticsRes.json();
-          // Collect all rows and upsert in a single batch per creative
-          const adPerfRows = (creativeAnalyticsData.elements || []).map((stat: Record<string, unknown>) => {
+          // Consume creative analytics from the batch map (no extra HTTP call needed)
+          const creativeElements = batchCreativeAnalyticsMap.get(creativeUrn) ?? [];
+          const adPerfRows = creativeElements.map((stat: Record<string, unknown>) => {
             const dr = stat.dateRange as Record<string, Record<string, number>>;
             const date = `${dr.start.year}-${String(dr.start.month).padStart(2, '0')}-${String(dr.start.day).padStart(2, '0')}`;
             const impressions = Number(stat.impressions) || 0;
@@ -1194,8 +1399,8 @@ serve(async (req) => {
               ctr: impressions > 0 ? clicks / impressions : 0,
               engagements: Number(stat.totalEngagements) || clicks,
               landing_page_clicks: Number(stat.landingPageClicks) || 0,
-              reference: creative.reference,
-              creative_url: creative.creative_url,
+              reference: resolvedReference,
+              creative_url: resolvedCreativeUrl,
               thumbnail_url: thumbnailUrl,
               video_views: Number(stat.videoViews) || 0,
               video_completions: Number(stat.videoCompletions) || 0,
@@ -1214,24 +1419,39 @@ serve(async (req) => {
           }
         }));
 
-        // 8. Fetch & store demographic breakdowns (all 5 pivots run concurrently inside).
-        await fetchAndStoreDemographics(campaignUrn, dbCampaign.id, dateRangeQuery, apiHeaders, supabaseClient);
+        // 8. OPTIMIZATION 1: Demographics — only sync on weekly cadence or when forced.
+        if (shouldSyncDemographics) {
+          await fetchAndStoreDemographics(campaignUrn, dbCampaign.id, dateRangeQuery, apiHeaders, supabaseClient);
+        }
+
         return true;
       });
 
       const campaignResults = await runWithConcurrency(campaignTasks, CAMPAIGN_CONCURRENCY);
       campaignsUpdated = campaignResults.filter(Boolean).length;
 
-      // 7. Mark success log
+      // 7. Mark success log (record whether demographics were synced this run)
       await supabaseClient
         .from('ingestion_log')
-        .update({ status: 'success', finished_at: new Date().toISOString(), campaigns_updated: campaignsUpdated })
+        .update({
+          status: 'success',
+          finished_at: new Date().toISOString(),
+          campaigns_updated: campaignsUpdated,
+          synced_demographics: shouldSyncDemographics,
+        })
         .eq('id', logId);
 
       return new Response(JSON.stringify({
         success: true,
         trigger: ingestionTrigger,
         campaigns_updated: campaignsUpdated,
+        synced_demographics: shouldSyncDemographics,
+        timing_ms: {
+          campaigns_fetch: timing_campaigns_ms,
+          phase1_global_parallel: timing_phase1_ms,
+          phase2_creative_analytics: timing_phase2_ms,
+          total: Date.now() - (now.getTime()),
+        },
         synced_date_range: {
           start: startDate.toISOString().slice(0, 10),
           end: endDate.toISOString().slice(0, 10),
