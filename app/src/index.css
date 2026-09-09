@@ -882,6 +882,11 @@ table:not(.ad-asset-table) tbody td:first-child {
   color: #166534;
 }
 
+.objective-website-visits {
+  background: #FEF3C7;
+  color: #92400E;
+}
+
 /* ── LINKEDIN ID CODE ── */
 code.linkedin-id {
   font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', monospace;

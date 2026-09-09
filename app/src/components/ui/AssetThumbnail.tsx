@@ -20,13 +20,14 @@ export default function AssetThumbnail({ thumbnailUrl, creativeName, creativeUrl
     };
   }, []);
 
-  if (!thumbnailUrl) {
-    return <span className="ad-thumb-placeholder" title="No preview image">🖼️</span>;
+  if (!thumbnailUrl && !creativeUrl) {
+    return <span className="ad-thumb-placeholder" title="No preview available">🖼️</span>;
   }
 
-  const embedUrl = creativeUrl ? creativeUrl.replace('/feed/update/', '/embed/feed/update/') : null;
+  const isLinkedInPost = Boolean(creativeUrl?.includes('linkedin.com/feed/update/'));
+  const embedUrl = isLinkedInPost && creativeUrl ? creativeUrl.replace('/feed/update/', '/embed/feed/update/') : null;
   const popoverWidth = embedUrl ? 330 : 240;
-  const popoverHeight = embedUrl ? 420 : 315;
+  const popoverHeight = embedUrl ? 420 : (thumbnailUrl ? 240 : 120);
 
   const handleMouseEnter = () => {
     if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
@@ -58,8 +59,12 @@ export default function AssetThumbnail({ thumbnailUrl, creativeName, creativeUrl
     if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
   };
 
-  const imageElement = (
+  const imageElement = thumbnailUrl ? (
     <img src={thumbnailUrl} alt={creativeName ?? 'Asset'} className="ad-thumb" />
+  ) : (
+    <span className="ad-thumb-placeholder" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }} title={`Open ${creativeName ?? 'landing page'}`}>
+      🔗
+    </span>
   );
 
   return (
@@ -70,7 +75,7 @@ export default function AssetThumbnail({ thumbnailUrl, creativeName, creativeUrl
       onMouseLeave={handleMouseLeave}
     >
       {creativeUrl ? (
-        <a href={creativeUrl} target="_blank" rel="noopener noreferrer" title={`Open ad on LinkedIn: ${creativeName ?? ''}`}>
+        <a href={creativeUrl} target="_blank" rel="noopener noreferrer" title={`Open: ${creativeName ?? ''}`}>
           {imageElement}
         </a>
       ) : (
@@ -86,7 +91,7 @@ export default function AssetThumbnail({ thumbnailUrl, creativeName, creativeUrl
               top: `${popoverPos.top}px`,
               left: `${popoverPos.left}px`,
               zIndex: 99999,
-              pointerEvents: 'auto', // Important: must be 'auto' to click play
+              pointerEvents: 'auto',
               background: '#fff',
               boxShadow: '0 8px 30px rgba(0,0,0,0.25)',
               borderRadius: '8px',
@@ -106,13 +111,34 @@ export default function AssetThumbnail({ thumbnailUrl, creativeName, creativeUrl
                 title={creativeName ?? 'Embedded post'}
                 style={{ background: '#fff', display: 'block' }}
               />
-            ) : (
+            ) : thumbnailUrl ? (
               <img 
                 src={thumbnailUrl} 
                 alt={creativeName ?? 'Enlarged Asset'} 
                 style={{ width: popoverWidth, height: 'auto', display: 'block' }}
               />
-            )}
+            ) : creativeUrl ? (
+              <div style={{ padding: '14px 16px', width: popoverWidth, boxSizing: 'border-box', textAlign: 'center', background: '#f8fafc' }}>
+                <div style={{ fontSize: '20px', marginBottom: '4px' }}>🔗</div>
+                <div style={{ fontWeight: 600, fontSize: '12px', color: '#0f172a', marginBottom: '6px', wordBreak: 'break-word' }}>
+                  {creativeName || 'Website Landing Page'}
+                </div>
+                <a
+                  href={creativeUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    fontSize: '11px',
+                    color: '#0284c7',
+                    wordBreak: 'break-all',
+                    textDecoration: 'underline',
+                    fontWeight: 500,
+                  }}
+                >
+                  Visit Link ↗
+                </a>
+              </div>
+            ) : null}
           </div>,
           document.body
         )}

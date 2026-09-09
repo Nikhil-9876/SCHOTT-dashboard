@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useAdPerformance, useCampaignMetrics, useIngestionLog } from '../lib/queries';
-import { formatEUR, formatEURCompact, formatNumber, formatPercent, computeDays, formatDays } from '../lib/formatters';
+import { formatEUR, formatEURCompact, formatNumber, formatPercent, computeDays, formatDays, formatDuration } from '../lib/formatters';
 import MetricCard from '../components/ui/MetricCard';
 import SectionHeader from '../components/ui/SectionHeader';
 import ChartContainer from '../components/ui/ChartContainer';
@@ -13,10 +13,11 @@ import DatePickerCalendar from '../components/ui/DatePickerCalendar';
 import type { CampaignWithMetrics, AdPerformanceMetric } from '../types';
 
 // ── Objective detection ────────────────────────────────────────────────────
-type Objective = 'All' | 'Awareness' | 'Engagement' | 'Video Views';
+type Objective = 'All' | 'Awareness' | 'Engagement' | 'Video Views' | 'Website Visits';
 
 function detectObjective(campaignName: string): Exclude<Objective, 'All'> {
   const n = campaignName.toLowerCase();
+  if (n.includes('_wv_') || n.includes('_wv ') || n.includes('websitevisit') || n.includes('website visit') || n.includes('web visit')) return 'Website Visits';
   if (n.includes('_vv_') || n.includes('_videoview') || n.includes('video view')) return 'Video Views';
   if (n.includes('_eng_') || n.includes('_engagement') || n.includes('engagement')) return 'Engagement';
   // Default to Awareness (covers _aw_ and anything else)
@@ -66,6 +67,7 @@ interface AggregatedAd {
   video_midpoint_completions: number;
   video_third_quartile_completions: number;
   avg_watch_depth: number; // weighted avg of quartile milestones (0–1)
+  video_duration_seconds: number | null; // from LinkedIn Media Assets API
 }
 
 function aggregateAdsByCreative(rows: AdPerformanceMetric[], campaignNameMap: Record<string, string>): AggregatedAd[] {
@@ -97,6 +99,16 @@ function aggregateAdsByCreative(rows: AdPerformanceMetric[], campaignNameMap: Re
       existing.video_first_quartile_completions += row.video_first_quartile_completions ?? 0;
       existing.video_midpoint_completions += row.video_midpoint_completions ?? 0;
       existing.video_third_quartile_completions += row.video_third_quartile_completions ?? 0;
+      // Carry forward metadata (first non-null wins)
+      if (existing.video_duration_seconds === null && row.video_duration_seconds != null) {
+        existing.video_duration_seconds = row.video_duration_seconds;
+      }
+      if (!existing.thumbnail_url && row.thumbnail_url) {
+        existing.thumbnail_url = row.thumbnail_url;
+      }
+      if (!existing.creative_url && row.creative_url) {
+        existing.creative_url = row.creative_url;
+      }
       // Recalculate CTR from totals
       existing.ctr = existing.impressions > 0 ? existing.clicks / existing.impressions : 0;
       // Recalculate avg watch depth — incremental-band formula (cumulative quartile thresholds)
@@ -154,6 +166,7 @@ function aggregateAdsByCreative(rows: AdPerformanceMetric[], campaignNameMap: Re
         video_midpoint_completions: vQ2,
         video_third_quartile_completions: vQ3,
         avg_watch_depth: initDepth,
+        video_duration_seconds: row.video_duration_seconds ?? null,
       });
     }
   }
@@ -227,15 +240,10 @@ export default function TOFUPage() {
     return data.map(c => ({ ...c, objective: detectObjective(c.name) }));
   }, [data]);
 
-  // ── Filter by objective (1 campaign per objective, no sub-filter needed) ─
-  // Also exclude known stale/old campaigns that should not appear on the dashboard
-  const EXCLUDED_CAMPAIGN_NAMES = ['video views - jan 30, 2026', 'video views - jul 22, 2026'];
+  // ── Filter by objective ─────────────────────────────────────────────────
   const filteredCampaigns = useMemo(() => {
-    let result = campaignsWithObjective.filter(
-      c => !EXCLUDED_CAMPAIGN_NAMES.includes(c.name.toLowerCase())
-    );
-    if (selectedObjective === 'All') return result;
-    return result.filter(c => c.objective === selectedObjective);
+    if (selectedObjective === 'All') return campaignsWithObjective;
+    return campaignsWithObjective.filter(c => c.objective === selectedObjective);
   }, [campaignsWithObjective, selectedObjective]);
 
   // ── Campaign name lookup map (for ad table) ─────────────────────────────
@@ -374,8 +382,28 @@ export default function TOFUPage() {
          totalVideoCompletions                                    * 1.0
       ) / totalVideoViews
     : 0;
+  // Weighted-average video duration across all assets that have duration data.
+  // Weight = video_views (more-viewed ads contribute proportionally more).
+  const { totalViewWeightedDur, totalViewsWithDur } = aggregatedAssets.reduce(
+    (acc, r) => {
+      if (r.video_duration_seconds != null && r.video_views > 0) {
+        acc.totalViewWeightedDur += r.avg_watch_depth * r.video_duration_seconds * r.video_views;
+        acc.totalViewsWithDur += r.video_views;
+      }
+      return acc;
+    },
+    { totalViewWeightedDur: 0, totalViewsWithDur: 0 }
+  );
+  const avgWatchDurationSec: number | null = totalViewsWithDur > 0
+    ? totalViewWeightedDur / totalViewsWithDur
+    : null;
   const hasVideoData = totalVideoStarts > 0 || totalVideoViews > 0;
   const isVideoObjective = selectedObjective === 'Video Views';
+  const isWVObjective = selectedObjective === 'Website Visits';
+
+  // ── Website Visits KPIs ────────────────────────────────────────────────────
+  const totalLPC = aggregatedAssets.reduce((acc, r) => acc + (r.landing_page_clicks ?? 0), 0);
+  const avgCostPerLPC = totalLPC > 0 ? totalSpend / totalLPC : 0;
 
   // ── Per-campaign video totals (aggregated from ad_performance_metrics) ────
   // Used to populate per-row video metrics in the campaign table
@@ -457,7 +485,7 @@ export default function TOFUPage() {
     );
   }
 
-  const OBJECTIVES: Objective[] = ['All', 'Awareness', 'Engagement', 'Video Views'];
+  const OBJECTIVES: Objective[] = ['All', 'Awareness', 'Engagement', 'Video Views', 'Website Visits'];
 
   return (
     <div className="content">
@@ -531,12 +559,21 @@ export default function TOFUPage() {
             <MetricCard label="CPM" value={formatEUR(avgCPM)} />
             <MetricCard label="CTR" value={formatPercent(avgCTR)} />
           </div>
-          <div className="grid-4" style={{ marginBottom: isVideoObjective ? '1rem' : '1.5rem' }}>
+          <div className="grid-4" style={{ marginBottom: (isVideoObjective || isWVObjective) ? '1rem' : '1.5rem' }}>
             <MetricCard label="Engagement Rate" value={formatPercent(avgEngRate)} />
             <MetricCard label="Ads" value={formatNumber(totalAds)} />
             <MetricCard label="Clicks" value={formatNumber(totalClicks)} />
             <MetricCard label="CPC" value={formatEUR(avgCPC)} />
           </div>
+          {isWVObjective && (
+            <div className="grid-5" style={{ marginBottom: '1.5rem' }}>
+              <MetricCard label="Landing Page Clicks" value={formatNumber(totalLPC)} />
+              <MetricCard label="Cost / LPC" value={formatEUR(avgCostPerLPC)} />
+              <MetricCard label="CTR" value={formatPercent(avgCTR)} />
+              <MetricCard label="CPM" value={formatEUR(avgCPM)} />
+              <MetricCard label="CPC" value={formatEUR(avgCPC)} />
+            </div>
+          )}
           {isVideoObjective && (
             <div className="grid-5" style={{ marginBottom: '1.5rem' }}>
               <MetricCard label="Video Views" value={formatNumber(totalVideoViews)} />
@@ -546,7 +583,7 @@ export default function TOFUPage() {
               <MetricCard label="CPV" value={formatEUR(avgCPV)} />
             </div>
           )}
-          {isVideoObjective && (
+          {isVideoObjective && (<>
             <div className="grid-5" style={{ marginBottom: '1.5rem' }}>
               <MetricCard label="25% Completions" value={formatNumber(totalVideoQ1)} />
               <MetricCard label="50% Completions" value={formatNumber(totalVideoQ2)} />
@@ -554,7 +591,7 @@ export default function TOFUPage() {
               <MetricCard label="CR%" value={formatPercent(videoCompletionRate)} />
               <MetricCard label="Avg Watch Depth" value={formatPercent(avgWatchDepth)} />
             </div>
-          )}
+          </>)}
 
           {/* Campaign Details */}
           {isVideoObjective ? (
@@ -638,6 +675,22 @@ export default function TOFUPage() {
                           <td className="td-nowrap td-num">{formatPercent(vComplRate)}</td>
                           <td className="td-nowrap td-num">{formatEUR(vCPV)}</td>
                           <td className="td-nowrap td-num">{formatPercent(vDepth)}</td>
+                          <td className="td-nowrap td-num">{
+                            (() => {
+                              const assets = aggregatedAssets.filter(a => a.campaign_id === c.id);
+                              const { wDur, wViews } = assets.reduce(
+                                (acc, a) => {
+                                  if (a.video_duration_seconds != null && a.video_views > 0) {
+                                    acc.wDur += a.avg_watch_depth * a.video_duration_seconds * a.video_views;
+                                    acc.wViews += a.video_views;
+                                  }
+                                  return acc;
+                                },
+                                { wDur: 0, wViews: 0 }
+                              );
+                              return formatDuration(wViews > 0 ? wDur / wViews : null);
+                            })()
+                          }</td>
                         </tr>
                       );
                     }
@@ -684,9 +737,10 @@ export default function TOFUPage() {
                 'Awareness': '#062E62',
                 'Engagement': '#0050FF',
                 'Video Views': '#3B82F6',
+                'Website Visits': '#0EA5E9',
               };
-              type ObjKey = 'Awareness' | 'Engagement' | 'Video Views';
-              const objKeys: ObjKey[] = ['Awareness', 'Engagement', 'Video Views'];
+              type ObjKey = 'Awareness' | 'Engagement' | 'Video Views' | 'Website Visits';
+              const objKeys: ObjKey[] = ['Awareness', 'Engagement', 'Video Views', 'Website Visits'];
 
               const grouped = objKeys.reduce<Record<ObjKey, { impressions: number; clicks: number }>>((acc, k) => {
                 acc[k] = { impressions: 0, clicks: 0 };
@@ -866,7 +920,7 @@ export default function TOFUPage() {
                           <th className="th-num-xs metric-swap-cell" onClick={() => handleSort('avg_watch_depth')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Average Watch Depth — estimated average % of video watched per viewer">
                             AWD%{renderSortIndicatorAd('avg_watch_depth')}
                           </th>
-                        </>
+                                                  </>
                       ) : (
                         <>
                           <th className="th-num-sm hide-lg metric-swap-cell" onClick={() => handleSort('reach')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Unique Reach">
@@ -1025,7 +1079,7 @@ export default function TOFUPage() {
                   })}
                   {sortedAssets.length === 0 && (
                     <tr>
-                      <td colSpan={isVideoObjective && videoMetricMode === 'video' ? 17 : 15} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>
+                      <td colSpan={isVideoObjective && videoMetricMode === 'video' ? 16 : 14} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>
                         No ad data available for the current selection.
                       </td>
                     </tr>
@@ -1077,9 +1131,10 @@ export default function TOFUPage() {
                 <colgroup>
                   <col style={{ width: 78 }} />
                   <col style={{ width: 64 }} />
-                  <col style={{ width: 108 }} />
+<col style={{ width: 108 }} />
                   <col style={{ width: 160 }} />
                   <col style={{ width: 62 }} />
+                  <col style={{ width: 68 }} />
                   <col style={{ width: 68 }} />
                   <col style={{ width: 68 }} />
                 </colgroup>
@@ -1106,7 +1161,8 @@ export default function TOFUPage() {
                            <th className="th-num-xs metric-swap-cell" title="Video Completions — count of viewers who watched 100%">100%</th>
                            <th className="th-num-xs metric-swap-cell" title="Completion Rate (completions / video views)">CR%</th>
                            <th className="th-num-xs metric-swap-cell" title="Cost Per View">CPV</th>
-                           <th className="th-num-xs metric-swap-cell" title="Average Watch Depth — estimated average % of video watched per viewer">AWD%</th>
+                            <th className="th-num-xs metric-swap-cell" title="Average Watch Depth — estimated average % of video watched per viewer">AWD%</th>
+
                          </>
                       ) : (
                         <>
@@ -1229,7 +1285,7 @@ export default function TOFUPage() {
                   })}
                   {dailyAdRows.length === 0 && (
                     <tr>
-                      <td colSpan={isVideoObjective && videoMetricMode === 'video' ? 16 : 14} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>
+                      <td colSpan={isVideoObjective && videoMetricMode === 'video' ? 15 : 13} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>
                         No daily ad performance rows for the current selection.
                       </td>
                     </tr>

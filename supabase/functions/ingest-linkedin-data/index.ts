@@ -78,9 +78,12 @@ const MIN_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 async function getIngestionTrigger(req: Request) {
   try {
     const payload = await req.clone().json();
-    return payload?.trigger === 'manual' ? 'manual' : 'scheduled';
+    return {
+      trigger: payload?.trigger === 'manual' ? 'manual' : 'scheduled',
+      isFullSync: Boolean(payload?.full),
+    };
   } catch {
-    return 'scheduled';
+    return { trigger: 'scheduled', isFullSync: false };
   }
 }
 
@@ -179,8 +182,53 @@ function getCreativeName(rawCreative: Record<string, unknown>, creativeId: strin
   );
 }
 
+function findLandingPageUrl(obj: unknown, depth = 0): string | null {
+  if (!obj || depth > 6) return null;
+  if (typeof obj === 'string') {
+    if (
+      (obj.startsWith('http://') || obj.startsWith('https://')) &&
+      !obj.includes('api.linkedin.com') &&
+      !obj.includes('schema.org') &&
+      !obj.includes('w3.org') &&
+      !obj.includes('licdn.com')
+    ) {
+      return obj;
+    }
+    return null;
+  }
+  if (typeof obj === 'object') {
+    for (const key of Object.keys(obj as Record<string, unknown>)) {
+      const val = (obj as Record<string, unknown>)[key];
+      const found = findLandingPageUrl(val, depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function findImageUrl(obj: unknown, depth = 0): string | null {
+  if (!obj || depth > 6) return null;
+  if (typeof obj === 'string') {
+    if (
+      obj.includes('licdn.com') ||
+      (obj.startsWith('http') && (obj.includes('.jpg') || obj.includes('.png') || obj.includes('.jpeg') || obj.includes('.webp')))
+    ) {
+      return obj;
+    }
+    return null;
+  }
+  if (typeof obj === 'object') {
+    for (const key of Object.keys(obj as Record<string, unknown>)) {
+      const val = (obj as Record<string, unknown>)[key];
+      const found = findImageUrl(val, depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 async function fetchCreatives(adAccountId: string, campaignUrn: string, headers: Record<string, string>) {
-  const creatives: { id: string; name: string; status: string | null; reference: string | null; creative_url: string | null }[] = [];
+  const creatives: { id: string; name: string; status: string | null; reference: string | null; creative_url: string | null; direct_image_url: string | null }[] = [];
   let pageToken: string | null = null;
 
   do {
@@ -192,18 +240,42 @@ async function fetchCreatives(adAccountId: string, campaignUrn: string, headers:
 
     const creativesData = await creativesRes.json();
     for (const rawCreative of (creativesData.elements || [])) {
+      console.log(`[debug-creative] ${rawCreative.id}:`, JSON.stringify(rawCreative));
       const creativeId = String(rawCreative.id);
-      // LinkedIn REST API often omits 'status' on creative objects;
-      // check both 'status' and 'intendedStatus' (used in newer API versions).
       const rawStatus = rawCreative.status ?? rawCreative.intendedStatus ?? null;
-
       const content = rawCreative.content as Record<string, unknown> | undefined;
-      const reference = String(rawCreative.reference ?? content?.reference ?? '');
+      const singleImage = content?.singleImage as Record<string, unknown> | undefined;
+      const videoContent = content?.video as Record<string, unknown> | undefined;
+
+      let reference = String(
+        rawCreative.reference ??
+        content?.reference ??
+        singleImage?.id ??
+        videoContent?.id ??
+        ''
+      );
+
+      if (!reference) {
+        const urnMatch = JSON.stringify(rawCreative).match(/urn:li:(digitalmediaAsset|image|video|share|ugcPost):[A-Za-z0-9_-]+/);
+        if (urnMatch) reference = urnMatch[0];
+      }
 
       let creativeUrl: string | null = null;
-      if (reference && reference.startsWith('urn:li:')) {
+      if (reference && (reference.startsWith('urn:li:ugcPost:') || reference.startsWith('urn:li:share:'))) {
         creativeUrl = `https://www.linkedin.com/feed/update/${reference}`;
+      } else {
+        const singleImageLink = (singleImage?.link as Record<string, unknown> | undefined)?.url as string | undefined;
+        const landingUrl = (
+          rawCreative.landingPageUrl ??
+          content?.landingPageUrl ??
+          singleImage?.landingPageUrl ??
+          singleImageLink
+        ) as string | undefined;
+
+        creativeUrl = landingUrl ?? findLandingPageUrl(rawCreative);
       }
+
+      const directImageUrl = findImageUrl(rawCreative);
 
       creatives.push({
         id: creativeId,
@@ -211,6 +283,7 @@ async function fetchCreatives(adAccountId: string, campaignUrn: string, headers:
         status: rawStatus ? String(rawStatus) : null,
         reference: reference || null,
         creative_url: creativeUrl,
+        direct_image_url: directImageUrl,
       });
     }
     pageToken = creativesData.metadata?.nextPageToken ?? null;
@@ -220,26 +293,73 @@ async function fetchCreatives(adAccountId: string, campaignUrn: string, headers:
 }
 
 // ── Fetch and permanently store ad creative thumbnail ────────────────────────
-// Strategy: scrape the LinkedIn public post page (server-side, no CORS) and
-// extract the og:image URL. LinkedIn embeds a stable, long-lived CDN URL in
-// the Open Graph meta tags (e=2147483647 = effectively permanent). We then
-// download the image bytes and re-host them in Supabase Storage for a fully
-// stable, auth-free thumbnail URL that the dashboard can use forever.
+// Strategy A (ugcPost/share): scrape the LinkedIn public post page and extract
+// the og:image URL, then re-host in Supabase Storage.
+// Strategy B (digitalmediaAsset): call LinkedIn mediaAssets API with auth token
+// to get a signed download URL, then re-host in Supabase Storage.
 async function fetchCreativeThumbnail(
   reference: string,
   creativeId: string,
   supabaseClient: ReturnType<typeof createClient>,
+  apiHeaders?: Record<string, string>,
 ): Promise<string | null> {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
     const numericId = creativeId.replace(/^urn:li:\w+:/, '');
-    const fileName = `${numericId}.jpg`;
 
-    // Step 1: Fetch the public LinkedIn post page and extract og:image
+    // ── Strategy B: digitalmediaAsset — fetch via LinkedIn Images API ──────────
+    if (reference.startsWith('urn:li:digitalmediaAsset:') && apiHeaders) {
+      // LinkedIn requires transforming the URN: digitalmediaAsset → image
+      const assetId = reference.replace('urn:li:digitalmediaAsset:', '');
+      const imageUrn = `urn:li:image:${assetId}`;
+      const encodedUrn = encodeURIComponent(imageUrn);
+      const assetRes = await fetch(
+        `https://api.linkedin.com/rest/images/${encodedUrn}?fields=downloadUrl,originalUrl`,
+        { headers: apiHeaders },
+      );
+      if (assetRes.ok) {
+        const assetData = await assetRes.json();
+        // downloadUrl is a signed temporary URL — download it immediately
+        const imageUrl: string | null =
+          assetData?.downloadUrl ??
+          assetData?.originalUrl ??
+          null;
+        if (imageUrl) {
+          const imgRes = await fetch(imageUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' },
+          });
+          if (imgRes.ok) {
+            const bytes = await imgRes.arrayBuffer();
+            const contentType = imgRes.headers.get('content-type') ?? 'image/jpeg';
+            const ext = contentType.includes('png') ? 'png' : contentType.includes('gif') ? 'gif' : 'jpg';
+            const finalFileName = `${numericId}.${ext}`;
+            const { error: uploadError } = await supabaseClient.storage
+              .from('ad-thumbnails')
+              .upload(finalFileName, bytes, { contentType, upsert: true });
+            if (!uploadError) {
+              const publicUrl = `${supabaseUrl}/storage/v1/object/public/ad-thumbnails/${finalFileName}`;
+              console.log(`[thumbnail] ✓ [image-api] Stored thumbnail for ${creativeId} → ${publicUrl}`);
+              return publicUrl;
+            }
+            console.warn(`[thumbnail] Storage upload failed for ${creativeId}: ${uploadError.message}`);
+          } else {
+            console.warn(`[thumbnail] Failed to download image for ${creativeId}: ${imgRes.status}`);
+          }
+        } else {
+          console.warn(`[thumbnail] No downloadUrl in Images API response for ${reference}:`, JSON.stringify(assetData));
+        }
+      } else {
+        const errText = await assetRes.text();
+        console.warn(`[thumbnail] Images API failed for ${imageUrn}: ${assetRes.status} — ${errText}`);
+      }
+      return null;
+    }
+
+
+    // ── Strategy A: ugcPost / share — scrape og:image from public post page ───
     const postUrl = `https://www.linkedin.com/feed/update/${encodeURIComponent(reference)}`;
     const pageRes = await fetch(postUrl, {
       headers: {
-        // Use a crawler UA so LinkedIn renders the full OG meta tags
         'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
@@ -262,7 +382,7 @@ async function fetchCreativeThumbnail(
       return null;
     }
 
-    // Step 2: Download image bytes from the CDN URL
+    // Download image bytes from the CDN URL
     const imgRes = await fetch(ogImageUrl, {
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' },
     });
@@ -275,7 +395,6 @@ async function fetchCreativeThumbnail(
     const ext = contentType.includes('png') ? 'png' : 'jpg';
     const finalFileName = `${numericId}.${ext}`;
 
-    // Step 3: Upload to Supabase Storage (upsert = idempotent on re-sync)
     const { error: uploadError } = await supabaseClient.storage
       .from('ad-thumbnails')
       .upload(finalFileName, bytes, { contentType, upsert: true });
@@ -285,7 +404,6 @@ async function fetchCreativeThumbnail(
       return null;
     }
 
-    // Step 4: Return stable public URL
     const publicUrl = `${supabaseUrl}/storage/v1/object/public/ad-thumbnails/${finalFileName}`;
     console.log(`[thumbnail] ✓ Stored thumbnail for ${creativeId} → ${publicUrl}`);
     return publicUrl;
@@ -756,7 +874,7 @@ serve(async (req) => {
     }
 
     const now = new Date();
-    const ingestionTrigger = await getIngestionTrigger(req);
+    const { trigger: ingestionTrigger, isFullSync } = await getIngestionTrigger(req);
     const isManualSync = ingestionTrigger === 'manual';
 
     const { data: lastSuccessLog, error: lastSuccessError } = await supabaseClient
@@ -770,7 +888,7 @@ serve(async (req) => {
 
     if (lastSuccessError) throw new Error(`Failed to read sync log: ${lastSuccessError.message}`);
 
-    const lastSuccessfulSyncAt = getLastSyncTimestamp(lastSuccessLog);
+    const lastSuccessfulSyncAt = isFullSync ? null : getLastSyncTimestamp(lastSuccessLog);
     if (!isManualSync && lastSuccessfulSyncAt && now.getTime() - lastSuccessfulSyncAt.getTime() < MIN_SYNC_INTERVAL_MS) {
       const nextSyncAt = new Date(lastSuccessfulSyncAt.getTime() + MIN_SYNC_INTERVAL_MS);
       return new Response(JSON.stringify({
@@ -841,39 +959,20 @@ serve(async (req) => {
 
       const campaignNameExcludes = getCampaignNameExcludes();
 
-      // Campaign start date cutoff — only sync campaigns that started on or after 2026-07-01
+      // ── Naming convention enforcement ────────────────────────────────────────
+      // Accepted campaigns MUST follow the convention: YYYY/MM/DD_REGION_FunnelStage_...
+      // e.g. "2026/07/01_APAC_ToFu_IN_P_PharmaTubing_FIOLAX-T_pharma-tubings_vv_2026/08/02_videoads"
+      // Campaigns that do not start with YYYY/MM/DD_ are rejected outright.
+      // The date prefix is also used for the 2026-07-01 start-date cutoff.
       const CAMPAIGN_START_CUTOFF = new Date('2026-07-01T00:00:00Z').getTime();
-
-      const MONTH_MAP: Record<string, number> = {
-        jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
-        jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
-      };
-
-      function isCampaignBeforeCutoff(name: string, runScheduleStart?: number): boolean {
-        // Check via LinkedIn API runSchedule field
-        if (typeof runScheduleStart === 'number' && runScheduleStart > 0) {
-          return runScheduleStart < CAMPAIGN_START_CUTOFF;
-        }
-        // Fallback: parse date from campaign name, e.g. "Video views - Jan 30, 2026" or "2026/07/01_..."
-        const shortMonthMatch = name.match(/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d+,?\s+(\d{4})/i);
-        if (shortMonthMatch) {
-          const month = MONTH_MAP[shortMonthMatch[1].toLowerCase()];
-          const year = parseInt(shortMonthMatch[2], 10);
-          return new Date(Date.UTC(year, month - 1, 1)).getTime() < CAMPAIGN_START_CUTOFF;
-        }
-        const slashDateMatch = name.match(/(\d{4})\/(\d{2})\/(\d{2})/);
-        if (slashDateMatch) {
-          return new Date(`${slashDateMatch[1]}-${slashDateMatch[2]}-${slashDateMatch[3]}T00:00:00Z`).getTime() < CAMPAIGN_START_CUTOFF;
-        }
-        return false; // no date found — allow through
-      }
+      const NAMING_CONVENTION_RE = /^(\d{4})\/(\d{2})\/(\d{2})_/;
 
       const filteredCampaigns = campaigns.filter((rawCamp) => {
         const campaignId = String(rawCamp.id);
         const campaignName = String(rawCamp.name ?? `LinkedIn campaign ${campaignId}`);
         const campaignNameLower = campaignName.toLowerCase();
 
-        // 1. Name include filter
+        // 1. Name include filter (LINKEDIN_CAMPAIGN_NAME_INCLUDES env variable)
         if (!campaignMatchesNameFilter(campaignName, campaignNameIncludes)) return false;
 
         // 2. Explicit blocklist (LINKEDIN_CAMPAIGN_NAME_EXCLUDES env variable)
@@ -882,20 +981,57 @@ serve(async (req) => {
           return false;
         }
 
-        // 3. Start date cutoff filter
+        // 3. Naming convention gate — must start with YYYY/MM/DD_
+        const conventionMatch = campaignName.match(NAMING_CONVENTION_RE);
+        if (!conventionMatch) {
+          console.log(`Skipping "${campaignName}" — does not follow naming convention (expected YYYY/MM/DD_...)`);
+          return false;
+        }
+
+        // 4. Start date cutoff — prefer LinkedIn API runSchedule.start, fall back to name prefix
         const runScheduleStart: number | undefined = (rawCamp as any).runSchedule?.start;
-        if (isCampaignBeforeCutoff(campaignName, runScheduleStart)) {
-          console.log(`Skipping "${campaignName}" — before 2026-07-01 cutoff (runSchedule.start=${runScheduleStart})`);
+        let campaignStartMs: number;
+        if (typeof runScheduleStart === 'number' && runScheduleStart > 0) {
+          campaignStartMs = runScheduleStart;
+        } else {
+          // Parse precisely from the YYYY/MM/DD_ prefix already captured by conventionMatch
+          campaignStartMs = new Date(
+            `${conventionMatch[1]}-${conventionMatch[2]}-${conventionMatch[3]}T00:00:00Z`
+          ).getTime();
+        }
+
+        if (campaignStartMs < CAMPAIGN_START_CUTOFF) {
+          console.log(`Skipping "${campaignName}" — start date ${new Date(campaignStartMs).toISOString().slice(0, 10)} is before 2026-07-01 cutoff`);
           return false;
         }
 
         return true;
       });
 
+      // Delete campaigns that belong to a different ad account (stale from config change)
       await supabaseClient
         .from('campaigns')
         .delete()
         .or(`ad_account_id.is.null,ad_account_id.neq.${adAccountId}`);
+
+      // Delete campaigns that are in the DB for this ad account but did NOT pass the
+      // current filters (name include/exclude + date cutoff). This purges previously-synced
+      // campaigns that no longer belong in the dashboard (e.g. old "Video views" campaigns
+      // that were ingested before the cutoff filter was added).
+      const filteredLinkedInIds = filteredCampaigns.map((c) => String(c.id));
+      if (filteredLinkedInIds.length > 0) {
+        await supabaseClient
+          .from('campaigns')
+          .delete()
+          .eq('ad_account_id', adAccountId)
+          .not('linkedin_id', 'in', `(${filteredLinkedInIds.join(',')})`);
+      } else {
+        // No campaigns passed the filter — delete everything for this account
+        await supabaseClient
+          .from('campaigns')
+          .delete()
+          .eq('ad_account_id', adAccountId);
+      }
 
       let campaignsUpdated = 0;
 
@@ -1004,9 +1140,9 @@ serve(async (req) => {
 
           // Fire creative analytics + thumbnail fetch simultaneously
           const effectiveCreativeStatus = creative.status ?? mappedStatus;
-          let thumbnailPromise: Promise<string | null> = Promise.resolve(thumbCache.get(creative.id) ?? null);
-          if (!thumbCache.has(creative.id) && creative.reference) {
-            thumbnailPromise = fetchCreativeThumbnail(creative.reference, creative.id, supabaseClient).then((url) => {
+          let thumbnailPromise: Promise<string | null> = Promise.resolve(thumbCache.get(creative.id) ?? creative.direct_image_url ?? null);
+          if (!thumbCache.has(creative.id) && !creative.direct_image_url && creative.reference) {
+            thumbnailPromise = fetchCreativeThumbnail(creative.reference, creative.id, supabaseClient, apiHeaders).then((url) => {
               if (url) thumbCache.set(creative.id, url);
               return url;
             });
