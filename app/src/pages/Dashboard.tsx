@@ -145,7 +145,7 @@ export default function Dashboard() {
         <FunnelCard
           variant="mofu"
           tag="MOFU"
-          title="FIOLAX Challenge"
+          title="FIOLAX Insight"
           description="Web Traffic &amp; Lead Gen"
           route="/mofu"
         />
@@ -160,7 +160,7 @@ export default function Dashboard() {
 
       <ChartContainer title="Funnel Performance Overview">
         <BarChart
-          labels={['FIOLAX Confidence', 'FIOLAX Challenge', 'FIOLAX Experience']}
+          labels={['FIOLAX Confidence', 'FIOLAX Insight', 'FIOLAX Experience']}
           values={[tofuImpressions, mofuImpressions, bofuImpressions]}
           colors={['#062E62', '#0050FF', '#3B82F6']}
           height={380}

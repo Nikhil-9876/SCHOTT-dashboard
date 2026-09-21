@@ -1267,7 +1267,9 @@ serve(async (req) => {
         // Categorize campaigns into funnel stages (TOFU / MOFU / BOFU) using custom rules
         let funnelStage: 'TOFU' | 'MOFU' | 'BOFU' = 'TOFU';
         const nameLower = campaignName.toLowerCase();
-        if (nameLower.includes('mofu') || nameLower.includes('consideration') || nameLower.includes('traffic')) {
+        if (nameLower.includes('mofu') || nameLower.includes('consideration') || nameLower.includes('traffic')
+            || nameLower.includes('_wv_') || nameLower.includes('_wv ') || nameLower.includes('websitevisit')
+            || nameLower.includes('website visit') || nameLower.includes('web visit')) {
           funnelStage = 'MOFU';
         } else if (nameLower.includes('bofu') || nameLower.includes('conversion') || nameLower.includes('lead')) {
           funnelStage = 'BOFU';

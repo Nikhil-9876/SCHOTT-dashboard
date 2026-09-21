@@ -13,11 +13,19 @@ import DatePickerCalendar from '../components/ui/DatePickerCalendar';
 import type { CampaignWithMetrics, AdPerformanceMetric } from '../types';
 
 // ── Objective detection ────────────────────────────────────────────────────
-type Objective = 'All' | 'Awareness' | 'Engagement' | 'Video Views' | 'Website Visits';
+type Objective = 'All' | 'Awareness' | 'Engagement' | 'Video Views';
+
+// Campaigns matching these name patterns belong to MOFU (Website Visits), not TOFU.
+// This client-side check ensures correct routing even if the DB still has funnel_stage='TOFU'
+// from a sync before the ingest function was updated.
+export function isWebsiteVisitsCampaign(name: string): boolean {
+  const n = name.toLowerCase();
+  return n.includes('_wv_') || n.includes('_wv ') || n.includes('websitevisit')
+    || n.includes('website visit') || n.includes('web visit');
+}
 
 function detectObjective(campaignName: string): Exclude<Objective, 'All'> {
   const n = campaignName.toLowerCase();
-  if (n.includes('_wv_') || n.includes('_wv ') || n.includes('websitevisit') || n.includes('website visit') || n.includes('web visit')) return 'Website Visits';
   if (n.includes('_vv_') || n.includes('_videoview') || n.includes('video view')) return 'Video Views';
   if (n.includes('_eng_') || n.includes('_engagement') || n.includes('engagement')) return 'Engagement';
   // Default to Awareness (covers _aw_ and anything else)
@@ -187,9 +195,14 @@ function aggregateAdsByCreative(rows: AdPerformanceMetric[], campaignNameMap: Re
 
 // ── Component ──────────────────────────────────────────────────────────────
 export default function TOFUPage() {
-  const { data, isLoading, isError, refetch } = useCampaignMetrics('TOFU');
-  const { data: adPerformance = [] } = useAdPerformance('TOFU');
+  const { data: rawData, isLoading, isError, refetch } = useCampaignMetrics('TOFU');
+  const { data: rawAdPerformance = [] } = useAdPerformance('TOFU');
   const { data: logs } = useIngestionLog();
+
+  // Exclude Website Visits campaigns — they belong in MOFU even if DB still has funnel_stage='TOFU'
+  const data = rawData?.filter(c => !isWebsiteVisitsCampaign(c.name));
+  const wvCampaignIds = new Set(rawData?.filter(c => isWebsiteVisitsCampaign(c.name)).map(c => c.id) ?? []);
+  const adPerformance = rawAdPerformance.filter(r => !wvCampaignIds.has(r.campaign_id));
 
   const [selectedObjective, setSelectedObjective] = useState<Objective>('All');
   const [selectedAdKeys, setSelectedAdKeys] = useState<Set<string>>(new Set());
@@ -241,7 +254,7 @@ export default function TOFUPage() {
   }, [data]);
 
   // ── Fixed objective display order ───────────────────────────────────────
-  const OBJECTIVE_ORDER: Exclude<Objective, 'All'>[] = ['Awareness', 'Engagement', 'Video Views', 'Website Visits'];
+  const OBJECTIVE_ORDER: Exclude<Objective, 'All'>[] = ['Awareness', 'Engagement', 'Video Views'];
 
   // ── Filter by objective + sort by funnel order ──────────────────────────
   const filteredCampaigns = useMemo(() => {
@@ -407,11 +420,6 @@ export default function TOFUPage() {
     : null;
   const hasVideoData = totalVideoStarts > 0 || totalVideoViews > 0;
   const isVideoObjective = selectedObjective === 'Video Views';
-  const isWVObjective = selectedObjective === 'Website Visits';
-
-  // ── Website Visits KPIs ────────────────────────────────────────────────────
-  const totalLPC = aggregatedAssets.reduce((acc, r) => acc + (r.landing_page_clicks ?? 0), 0);
-  const avgCostPerLPC = totalLPC > 0 ? totalSpend / totalLPC : 0;
 
   // ── Per-campaign video totals (aggregated from ad_performance_metrics) ────
   // Used to populate per-row video metrics in the campaign table
@@ -493,7 +501,7 @@ export default function TOFUPage() {
     );
   }
 
-  const OBJECTIVES: Objective[] = ['All', 'Awareness', 'Engagement', 'Video Views', 'Website Visits'];
+  const OBJECTIVES: Objective[] = ['All', 'Awareness', 'Engagement', 'Video Views'];
 
   return (
     <div className="content">
@@ -567,21 +575,13 @@ export default function TOFUPage() {
             <MetricCard label="CPM" value={formatEUR(avgCPM)} />
             <MetricCard label="CTR" value={formatPercent(avgCTR)} />
           </div>
-          <div className="grid-4" style={{ marginBottom: (isVideoObjective || isWVObjective) ? '1rem' : '1.5rem' }}>
+          <div className="grid-4" style={{ marginBottom: isVideoObjective ? '1rem' : '1.5rem' }}>
             <MetricCard label="Engagement Rate" value={formatPercent(avgEngRate)} />
             <MetricCard label="Ads" value={formatNumber(totalAds)} />
             <MetricCard label="Clicks" value={formatNumber(totalClicks)} />
             <MetricCard label="CPC" value={formatEUR(avgCPC)} />
           </div>
-          {isWVObjective && (
-            <div className="grid-5" style={{ marginBottom: '1.5rem' }}>
-              <MetricCard label="Landing Page Clicks" value={formatNumber(totalLPC)} />
-              <MetricCard label="Cost / LPC" value={formatEUR(avgCostPerLPC)} />
-              <MetricCard label="CTR" value={formatPercent(avgCTR)} />
-              <MetricCard label="CPM" value={formatEUR(avgCPM)} />
-              <MetricCard label="CPC" value={formatEUR(avgCPC)} />
-            </div>
-          )}
+
           {isVideoObjective && (
             <div className="grid-5" style={{ marginBottom: '1.5rem' }}>
               <MetricCard label="Video Views" value={formatNumber(totalVideoViews)} />
@@ -745,10 +745,9 @@ export default function TOFUPage() {
                 'Awareness': '#062E62',
                 'Engagement': '#0050FF',
                 'Video Views': '#3B82F6',
-                'Website Visits': '#0EA5E9',
               };
-              type ObjKey = 'Awareness' | 'Engagement' | 'Video Views' | 'Website Visits';
-              const objKeys: ObjKey[] = ['Awareness', 'Engagement', 'Video Views', 'Website Visits'];
+              type ObjKey = 'Awareness' | 'Engagement' | 'Video Views';
+              const objKeys: ObjKey[] = ['Awareness', 'Engagement', 'Video Views'];
 
               const grouped = objKeys.reduce<Record<ObjKey, { impressions: number; clicks: number }>>((acc, k) => {
                 acc[k] = { impressions: 0, clicks: 0 };
