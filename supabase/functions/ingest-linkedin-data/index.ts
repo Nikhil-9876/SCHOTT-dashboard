@@ -64,6 +64,20 @@ function campaignMatchesNameFilter(campaignName: string, includeTerms: string[])
   return includeTerms.some((term) => normalizedName.includes(term));
 }
 
+// ── Explicit funnel-stage overrides ──────────────────────────────────────────
+// Campaigns whose name-based classification is incorrect can be pinned here by
+// LinkedIn campaign ID. These take priority over the name-detection heuristic
+// and are never overwritten by future syncs.
+//
+// Format: '<linkedin_campaign_id>': 'TOFU' | 'MOFU' | 'BOFU'
+//
+// Add entries whenever a campaign is manually reclassified by the client.
+const FUNNEL_STAGE_OVERRIDES: Record<string, 'TOFU' | 'MOFU' | 'BOFU'> = {
+  // 2026/10/15_IN_ToFu_IN_T_PharmaTubing_FIOLAX-T_pharma-tubings_webinar_2026/10/15_sia
+  // Moved TOFU → MOFU per client request 2026-10-21 (name contains "ToFu" but campaign is MOFU)
+  '896078813': 'MOFU',
+};
+
 function getAnalyticsLookbackDays() {
   const configuredDays = Number(Deno.env.get('LINKEDIN_ANALYTICS_LOOKBACK_DAYS'));
   if (Number.isFinite(configuredDays) && configuredDays > 0) {
@@ -1062,13 +1076,13 @@ serve(async (req) => {
         : null;
       const daysSinceLastCampaignRefresh = lastCampaignRefreshAt
         ? (now.getTime() - lastCampaignRefreshAt.getTime()) / (1000 * 60 * 60 * 24)
-        : 0; // null means "no tracking history yet" → default to using DB cache
+        : Infinity; // null = no tracking history → treat as expired so we fetch from LinkedIn
 
-      // Refresh from LinkedIn only on explicit full syncs or when 7-day clock expires.
-      // If no history exists (lastCampaignRefreshAt = null), use DB campaigns — this
-      // handles legacy rows before the refreshed_campaigns column was added.
+      // Refresh from LinkedIn on explicit full syncs, when 7-day clock expires, or when
+      // there is no tracking history (newly deployed or column added after initial sync).
+      // This ensures newly created LinkedIn campaigns are discovered promptly.
       const shouldRefreshCampaigns = isFullSync
-        || (lastCampaignRefreshAt !== null && daysSinceLastCampaignRefresh >= CAMPAIGN_LIST_CACHE_DAYS);
+        || daysSinceLastCampaignRefresh >= CAMPAIGN_LIST_CACHE_DAYS;
 
 
       const tCampaignsFetch = Date.now();
@@ -1264,13 +1278,20 @@ serve(async (req) => {
         if (rawCamp.status === 'ACTIVE') mappedStatus = 'ACTIVE';
         if (rawCamp.status === 'COMPLETED') mappedStatus = 'COMPLETED';
 
-        // Categorize campaigns into funnel stages (TOFU / MOFU / BOFU) using custom rules
-        let funnelStage: 'TOFU' | 'MOFU' | 'BOFU' = 'TOFU';
-        const nameLower = campaignName.toLowerCase();
-        if (nameLower.includes('mofu') || nameLower.includes('consideration') || nameLower.includes('traffic')) {
-          funnelStage = 'MOFU';
-        } else if (nameLower.includes('bofu') || nameLower.includes('conversion') || nameLower.includes('lead')) {
-          funnelStage = 'BOFU';
+        // Categorize campaigns into funnel stages (TOFU / MOFU / BOFU).
+        // 1. Check explicit overrides first (pinned by LinkedIn campaign ID).
+        // 2. Fall back to name-based heuristics.
+        let funnelStage: 'TOFU' | 'MOFU' | 'BOFU';
+        if (FUNNEL_STAGE_OVERRIDES[campaignId]) {
+          funnelStage = FUNNEL_STAGE_OVERRIDES[campaignId];
+        } else {
+          funnelStage = 'TOFU';
+          const nameLower = campaignName.toLowerCase();
+          if (nameLower.includes('mofu') || nameLower.includes('consideration') || nameLower.includes('traffic')) {
+            funnelStage = 'MOFU';
+          } else if (nameLower.includes('bofu') || nameLower.includes('conversion') || nameLower.includes('lead')) {
+            funnelStage = 'BOFU';
+          }
         }
 
         // Upsert Campaign details in campaigns table
@@ -1322,9 +1343,21 @@ serve(async (req) => {
           };
         });
         if (campaignMetricRows.length > 0) {
-          await supabaseClient
-            .from('campaign_metrics')
-            .upsert(campaignMetricRows, { onConflict: 'campaign_id,date_range_start,date_range_end' });
+          // Split rows: reach > 0 → full upsert (overwrite all cols including reach)
+          //             reach = 0 → ignoreDuplicates so we never overwrite a settled reach with 0
+          // LinkedIn's approximateMemberReach takes ~24h to settle; recent days often return 0.
+          const reachRows   = campaignMetricRows.filter((r) => r.reach > 0);
+          const noReachRows = campaignMetricRows.filter((r) => r.reach === 0);
+          if (reachRows.length > 0) {
+            await supabaseClient
+              .from('campaign_metrics')
+              .upsert(reachRows, { onConflict: 'campaign_id,date_range_start,date_range_end' });
+          }
+          if (noReachRows.length > 0) {
+            await supabaseClient
+              .from('campaign_metrics')
+              .upsert(noReachRows, { onConflict: 'campaign_id,date_range_start,date_range_end', ignoreDuplicates: true });
+          }
         }
 
         // 7. Fetch & store creative-level analytics and thumbnails in parallel.
@@ -1413,9 +1446,19 @@ serve(async (req) => {
           });
 
           if (adPerfRows.length > 0) {
-            await supabaseClient
-              .from('ad_performance_metrics')
-              .upsert(adPerfRows, { onConflict: 'campaign_id,creative_id,date' });
+            // Same reach-preservation split for ad-level metrics
+            const reachAdRows   = adPerfRows.filter((r) => r.reach > 0);
+            const noReachAdRows = adPerfRows.filter((r) => r.reach === 0);
+            if (reachAdRows.length > 0) {
+              await supabaseClient
+                .from('ad_performance_metrics')
+                .upsert(reachAdRows, { onConflict: 'campaign_id,creative_id,date' });
+            }
+            if (noReachAdRows.length > 0) {
+              await supabaseClient
+                .from('ad_performance_metrics')
+                .upsert(noReachAdRows, { onConflict: 'campaign_id,creative_id,date', ignoreDuplicates: true });
+            }
           }
         }));
 

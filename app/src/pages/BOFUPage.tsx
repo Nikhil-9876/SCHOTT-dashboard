@@ -1,6 +1,15 @@
 import { useState, useMemo } from 'react';
 import { useAdPerformance, useCampaignMetrics, useIngestionLog } from '../lib/queries';
 import { formatEUR, formatEURCompact, formatNumber, formatPercent, computeDays, formatDays, formatDuration } from '../lib/formatters';
+import {
+  detectObjective,
+  sum, wavg,
+  computeVideoKPIs, buildCampaignVideoTotals, computeWatchDepth,
+  shortLabel,
+  type Objective,
+  OBJECTIVES, OBJECTIVE_ORDER,
+} from '../lib/campaignUtils';
+import { useFunnelAdTable } from '../hooks/useFunnelAdTable';
 import MetricCard from '../components/ui/MetricCard';
 import SectionHeader from '../components/ui/SectionHeader';
 import ChartContainer from '../components/ui/ChartContainer';
@@ -8,157 +17,8 @@ import Badge from '../components/ui/Badge';
 import BarChart from '../components/charts/BarChart';
 import Footer from '../components/layout/Footer';
 import { SkeletonCard, SkeletonChart } from '../components/ui/Skeleton';
-import AssetThumbnail from '../components/ui/AssetThumbnail';
-import DatePickerCalendar from '../components/ui/DatePickerCalendar';
-import type { CampaignWithMetrics, AdPerformanceMetric } from '../types';
-
-// ── Objective detection ────────────────────────────────────────────────────
-type Objective = 'All' | 'Awareness' | 'Engagement' | 'Video Views';
-
-function detectObjective(campaignName: string): Exclude<Objective, 'All'> {
-  const n = campaignName.toLowerCase();
-  if (n.includes('_vv_') || n.includes('_videoview') || n.includes('video view')) return 'Video Views';
-  if (n.includes('_eng_') || n.includes('_engagement') || n.includes('engagement')) return 'Engagement';
-  return 'Awareness';
-}
-
-// ── Aggregation helpers ────────────────────────────────────────────────────
-function sum(campaigns: CampaignWithMetrics[], key: keyof NonNullable<CampaignWithMetrics['latest_metric']>): number {
-  return campaigns.reduce((acc, c) => acc + (Number(c.latest_metric?.[key]) || 0), 0);
-}
-function wavg(
-  campaigns: CampaignWithMetrics[],
-  key: keyof NonNullable<CampaignWithMetrics['latest_metric']>,
-  weight: keyof NonNullable<CampaignWithMetrics['latest_metric']>,
-): number {
-  const totalW = sum(campaigns, weight);
-  if (!totalW) return 0;
-  return campaigns.reduce((acc, c) => {
-    const w = Number(c.latest_metric?.[weight]) || 0;
-    const v = Number(c.latest_metric?.[key]) || 0;
-    return acc + v * w;
-  }, 0) / totalW;
-}
-
-// ── Aggregate daily ad rows → one row per unique creative ──────────────────
-interface AggregatedAd {
-  creative_id: string;
-  creative_name: string;
-  campaign_name: string;
-  campaign_id: string;
-  status: string | null;
-  spend_eur: number;
-  impressions: number;
-  reach: number;
-  clicks: number;
-  ctr: number;
-  engagements: number;
-  landing_page_clicks: number;
-  creative_url: string | null;
-  reference: string | null;
-  thumbnail_url: string | null;
-  days_running: number | null;
-  video_views: number;
-  video_completions: number;
-  video_starts: number;
-  video_first_quartile_completions: number;
-  video_midpoint_completions: number;
-  video_third_quartile_completions: number;
-  avg_watch_depth: number;
-  video_duration_seconds: number | null;
-}
-
-function aggregateAdsByCreative(rows: AdPerformanceMetric[], campaignNameMap: Record<string, string>): AggregatedAd[] {
-  const map = new Map<string, AggregatedAd>();
-  const minDate = new Map<string, string>();
-  const maxDate = new Map<string, string>();
-
-  for (const row of rows) {
-    const key = `${row.campaign_id}__${row.creative_id}`;
-    if (row.date) {
-      const prev = minDate.get(key);
-      if (!prev || row.date < prev) minDate.set(key, row.date);
-      const prevMax = maxDate.get(key);
-      if (!prevMax || row.date > prevMax) maxDate.set(key, row.date);
-    }
-    const existing = map.get(key);
-    if (existing) {
-      existing.spend_eur += row.spend_eur ?? 0;
-      existing.impressions += row.impressions ?? 0;
-      existing.reach += row.reach ?? 0;
-      existing.clicks += row.clicks ?? 0;
-      existing.engagements += row.engagements ?? 0;
-      existing.landing_page_clicks += row.landing_page_clicks ?? 0;
-      existing.video_views += row.video_views ?? 0;
-      existing.video_completions += row.video_completions ?? 0;
-      existing.video_starts += row.video_starts ?? 0;
-      existing.video_first_quartile_completions += row.video_first_quartile_completions ?? 0;
-      existing.video_midpoint_completions += row.video_midpoint_completions ?? 0;
-      existing.video_third_quartile_completions += row.video_third_quartile_completions ?? 0;
-      if (existing.video_duration_seconds === null && row.video_duration_seconds != null) {
-        existing.video_duration_seconds = row.video_duration_seconds;
-      }
-      if (!existing.thumbnail_url && row.thumbnail_url) existing.thumbnail_url = row.thumbnail_url;
-      if (!existing.creative_url && row.creative_url) existing.creative_url = row.creative_url;
-      existing.ctr = existing.impressions > 0 ? existing.clicks / existing.impressions : 0;
-      const vv = existing.video_views;
-      const vQ1e = existing.video_first_quartile_completions;
-      const vQ2e = existing.video_midpoint_completions;
-      const vQ3e = existing.video_third_quartile_completions;
-      const vCe = existing.video_completions;
-      existing.avg_watch_depth = vv > 0
-        ? ((vv - vQ1e) * 0.125 + (vQ1e - vQ2e) * 0.375 + (vQ2e - vQ3e) * 0.625 + (vQ3e - vCe) * 0.875 + vCe * 1.0) / vv
-        : 0;
-    } else {
-      const vStarts = row.video_starts ?? 0;
-      const vQ1 = row.video_first_quartile_completions ?? 0;
-      const vQ2 = row.video_midpoint_completions ?? 0;
-      const vQ3 = row.video_third_quartile_completions ?? 0;
-      const vCompl = row.video_completions ?? 0;
-      const vViews = row.video_views ?? 0;
-      const initDepth = vViews > 0
-        ? ((vViews - vQ1) * 0.125 + (vQ1 - vQ2) * 0.375 + (vQ2 - vQ3) * 0.625 + (vQ3 - vCompl) * 0.875 + vCompl * 1.0) / vViews
-        : 0;
-      map.set(key, {
-        creative_id: row.creative_id,
-        creative_name: row.creative_name,
-        campaign_id: row.campaign_id,
-        campaign_name: campaignNameMap[row.campaign_id] ?? '—',
-        status: row.status ?? null,
-        spend_eur: row.spend_eur ?? 0,
-        impressions: row.impressions ?? 0,
-        reach: row.reach ?? 0,
-        clicks: row.clicks ?? 0,
-        ctr: row.ctr ?? 0,
-        engagements: row.engagements ?? 0,
-        landing_page_clicks: row.landing_page_clicks ?? 0,
-        creative_url: row.creative_url ?? null,
-        reference: row.reference ?? null,
-        thumbnail_url: row.thumbnail_url ?? null,
-        days_running: null,
-        video_views: vViews,
-        video_completions: vCompl,
-        video_starts: vStarts,
-        video_first_quartile_completions: vQ1,
-        video_midpoint_completions: vQ2,
-        video_third_quartile_completions: vQ3,
-        avg_watch_depth: initDepth,
-        video_duration_seconds: row.video_duration_seconds ?? null,
-      });
-    }
-  }
-
-  for (const [key, ad] of map.entries()) {
-    const start = minDate.get(key);
-    const end = maxDate.get(key);
-    if (start) {
-      const useEnd = ad.status === 'ACTIVE' ? undefined : end;
-      ad.days_running = computeDays(start, useEnd);
-    }
-  }
-
-  return Array.from(map.values()).sort((a, b) => b.impressions - a.impressions);
-}
+import VideoMetricToggle from '../components/ui/VideoMetricToggle';
+import { AdAssetTable, DailyAdTable } from '../components/ui/FunnelTables';
 
 // ── Component ──────────────────────────────────────────────────────────────
 export default function BOFUPage() {
@@ -167,43 +27,13 @@ export default function BOFUPage() {
   const { data: logs } = useIngestionLog();
 
   const [selectedObjective, setSelectedObjective] = useState<Objective>('All');
-  const [selectedAdKeys, setSelectedAdKeys] = useState<Set<string>>(new Set());
-  const [selectedDate, setSelectedDate] = useState<string>('');
   const [videoMetricMode, setVideoMetricMode] = useState<'video' | 'general'>('video');
 
-  function toggleAdSelection(key: string) {
-    setSelectedAdKeys(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }
-  function clearAdSelection() { setSelectedAdKeys(new Set()); }
-
-  const [sortField, setSortField] = useState<keyof AggregatedAd | 'cpm' | 'cpc'>('impressions');
-  const [sortAscending, setSortAscending] = useState<boolean>(false);
-
-  function handleSort(field: keyof AggregatedAd | 'cpm' | 'cpc') {
-    if (sortField === field) {
-      setSortAscending(prev => !prev);
-    } else {
-      setSortField(field);
-      setSortAscending(['creative_name', 'campaign_name', 'status', 'creative_id'].includes(field as string));
-    }
-  }
-  function renderSortIndicator(field: keyof AggregatedAd | 'cpm' | 'cpc') {
-    if (sortField !== field) return null;
-    return sortAscending ? ' ▲' : ' ▼';
-  }
-
-  // ── Derived: campaigns with objective label ─────────────────────────────
+  // ── Campaigns with objective labels ──────────────────────────────────────
   const campaignsWithObjective = useMemo(() => {
     if (!data) return [];
     return data.map(c => ({ ...c, objective: detectObjective(c.name) }));
   }, [data]);
-
-  const OBJECTIVE_ORDER: Exclude<Objective, 'All'>[] = ['Awareness', 'Engagement', 'Video Views'];
 
   const filteredCampaigns = useMemo(() => {
     const list = selectedObjective === 'All'
@@ -212,12 +42,7 @@ export default function BOFUPage() {
     return [...list].sort((a, b) => OBJECTIVE_ORDER.indexOf(a.objective) - OBJECTIVE_ORDER.indexOf(b.objective));
   }, [campaignsWithObjective, selectedObjective]);
 
-  const campaignNameMap = useMemo<Record<string, string>>(() => {
-    const m: Record<string, string> = {};
-    (data ?? []).forEach(c => { m[c.id] = c.name; });
-    return m;
-  }, [data]);
-
+  // ── Status map for ad-row normalisation ──────────────────────────────────
   const campaignStatusMap = useMemo<Record<string, string>>(() => {
     const m: Record<string, string> = {};
     (data ?? []).forEach(c => { m[c.id] = c.status; });
@@ -235,109 +60,38 @@ export default function BOFUPage() {
       });
   }, [adPerformance, filteredCampaigns, campaignStatusMap]);
 
-  const aggregatedAssets = useMemo(() => aggregateAdsByCreative(filteredAdRows, campaignNameMap), [filteredAdRows, campaignNameMap]);
+  // ── Shared ad-table hook ──────────────────────────────────────────────────
+  const adTable = useFunnelAdTable(filteredCampaigns, filteredAdRows);
+  const { aggregatedAssets, sortedAssets, dailyAdRows, availableDates, selectedDate, setSelectedDate, clearAdSelection } = adTable;
 
-  const sortedAssets = useMemo(() => {
-    return [...aggregatedAssets].sort((a, b) => {
-      let aVal: any, bVal: any;
-      if (sortField === 'cpm') {
-        aVal = a.impressions ? (a.spend_eur / a.impressions) * 1000 : 0;
-        bVal = b.impressions ? (b.spend_eur / b.impressions) * 1000 : 0;
-      } else if (sortField === 'cpc') {
-        aVal = a.clicks ? a.spend_eur / a.clicks : 0;
-        bVal = b.clicks ? b.spend_eur / b.clicks : 0;
-      } else {
-        aVal = a[sortField]; bVal = b[sortField];
-      }
-      if (aVal === null || aVal === undefined) return sortAscending ? -1 : 1;
-      if (bVal === null || bVal === undefined) return sortAscending ? 1 : -1;
-      if (typeof aVal === 'string') return sortAscending ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
-      return sortAscending ? aVal - bVal : bVal - aVal;
-    });
-  }, [aggregatedAssets, sortField, sortAscending]);
-
-  const availableDates = useMemo(() => {
-    const s = new Set<string>();
-    for (const r of filteredAdRows) { if (r.date) s.add(r.date.slice(0, 10)); }
-    return s;
-  }, [filteredAdRows]);
-
-  const dailyAdRows = useMemo(() => {
-    let rows = filteredAdRows;
-    if (selectedAdKeys.size > 0) rows = rows.filter(r => selectedAdKeys.has(`${r.campaign_id}__${r.creative_id}`));
-    if (selectedDate) rows = rows.filter(r => r.date?.slice(0, 10) === selectedDate);
-    return rows;
-  }, [filteredAdRows, selectedAdKeys, selectedDate]);
-
-  // ── Key metrics ──────────────────────────────────────────────────────────
-  const completed = filteredCampaigns.filter(c => c.status === 'COMPLETED');
-  const active = filteredCampaigns.filter(c => c.status === 'ACTIVE');
+  // ── Key metrics ───────────────────────────────────────────────────────────
+  const completed    = filteredCampaigns.filter(c => c.status === 'COMPLETED');
+  const active       = filteredCampaigns.filter(c => c.status === 'ACTIVE');
   const completedAds = completed.reduce((a, c) => a + c.ad_count, 0);
-  const activeAds = active.reduce((a, c) => a + c.ad_count, 0);
+  const activeAds    = active.reduce((a, c) => a + c.ad_count, 0);
 
-  const totalAds = filteredCampaigns.reduce((a, c) => a + c.ad_count, 0);
-  const totalSpend = sum(filteredCampaigns, 'spend_eur');
-  const totalReach = sum(filteredCampaigns, 'reach');
+  const totalAds         = filteredCampaigns.reduce((a, c) => a + c.ad_count, 0);
+  const totalSpend       = sum(filteredCampaigns, 'spend_eur');
+  const totalReach       = sum(filteredCampaigns, 'reach');
   const totalImpressions = sum(filteredCampaigns, 'impressions');
-  const totalClicks = sum(filteredCampaigns, 'clicks');
-  const totalLeads = sum(filteredCampaigns, 'leads');
-  const avgCPM = totalImpressions ? (totalSpend / totalImpressions) * 1000 : 0;
-  const avgCPC = totalClicks ? totalSpend / totalClicks : 0;
-  const avgCTR = wavg(filteredCampaigns, 'ctr', 'impressions');
-  const avgEngRate = wavg(filteredCampaigns, 'engagement_rate', 'impressions');
-  const avgCPL = totalLeads ? totalSpend / totalLeads : 0;
-  const convRate = totalClicks ? (totalLeads / totalClicks) * 100 : 0;
+  const totalClicks      = sum(filteredCampaigns, 'clicks');
+  const totalLeads       = sum(filteredCampaigns, 'leads');
+  const avgCPM           = totalImpressions ? (totalSpend / totalImpressions) * 1000 : 0;
+  const avgCPC           = totalClicks ? totalSpend / totalClicks : 0;
+  const avgCTR           = wavg(filteredCampaigns, 'ctr', 'impressions');
+  const avgEngRate       = wavg(filteredCampaigns, 'engagement_rate', 'impressions');
+  const avgCPL           = totalLeads ? totalSpend / totalLeads : 0;
+  const convRate         = totalClicks ? (totalLeads / totalClicks) * 100 : 0;
 
   // ── Video KPIs ────────────────────────────────────────────────────────────
-  const totalVideoViews = aggregatedAssets.reduce((acc, r) => acc + (r.video_views ?? 0), 0);
-  const totalVideoCompletions = aggregatedAssets.reduce((acc, r) => acc + (r.video_completions ?? 0), 0);
-  const totalVideoQ1 = aggregatedAssets.reduce((acc, r) => acc + (r.video_first_quartile_completions ?? 0), 0);
-  const totalVideoQ2 = aggregatedAssets.reduce((acc, r) => acc + (r.video_midpoint_completions ?? 0), 0);
-  const totalVideoQ3 = aggregatedAssets.reduce((acc, r) => acc + (r.video_third_quartile_completions ?? 0), 0);
-  const totalVideoStarts = aggregatedAssets.reduce((acc, r) => acc + (r.video_starts ?? 0), 0);
-  const totalVideoSpend = aggregatedAssets.reduce((acc, r) => acc + (r.spend_eur ?? 0), 0);
-  const totalVideoImpressions = aggregatedAssets.reduce((acc, r) => acc + (r.impressions ?? 0), 0);
-  const avgViewRate = totalVideoImpressions > 0 ? totalVideoViews / totalVideoImpressions : 0;
-  const avgCPV = totalVideoViews > 0 ? totalVideoSpend / totalVideoViews : 0;
-  const videoCompletionRate = totalVideoViews > 0 ? totalVideoCompletions / totalVideoViews : 0;
-  const avgWatchDepth = totalVideoViews > 0
-    ? ((totalVideoViews - totalVideoQ1) * 0.125 + (totalVideoQ1 - totalVideoQ2) * 0.375 +
-       (totalVideoQ2 - totalVideoQ3) * 0.625 + (totalVideoQ3 - totalVideoCompletions) * 0.875 +
-        totalVideoCompletions * 1.0) / totalVideoViews
-    : 0;
-  const { totalViewWeightedDur, totalViewsWithDur } = aggregatedAssets.reduce(
-    (acc, r) => {
-      if (r.video_duration_seconds != null && r.video_views > 0) {
-        acc.totalViewWeightedDur += r.avg_watch_depth * r.video_duration_seconds * r.video_views;
-        acc.totalViewsWithDur += r.video_views;
-      }
-      return acc;
-    },
-    { totalViewWeightedDur: 0, totalViewsWithDur: 0 }
-  );
-  const avgWatchDurationSec: number | null = totalViewsWithDur > 0 ? totalViewWeightedDur / totalViewsWithDur : null;
-  const hasVideoData = totalVideoStarts > 0 || totalVideoViews > 0;
+  const videoKPIs = useMemo(() => computeVideoKPIs(aggregatedAssets), [aggregatedAssets]);
+  const { totalVideoViews, totalVideoCompletions, totalVideoQ1, totalVideoQ2, totalVideoQ3,
+          totalVideoStarts, avgViewRate, avgCPV, videoCompletionRate, avgWatchDepth } = videoKPIs;
+
   const isVideoObjective = selectedObjective === 'Video Views';
 
   // ── Per-campaign video totals ─────────────────────────────────────────────
-  const campaignVideoTotals = useMemo(() => {
-    const map = new Map<string, { video_views: number; video_starts: number; video_completions: number; video_q1: number; video_q2: number; video_q3: number; spend: number; impressions: number }>();
-    for (const row of filteredAdRows) {
-      const id = row.campaign_id;
-      const prev = map.get(id) ?? { video_views: 0, video_starts: 0, video_completions: 0, video_q1: 0, video_q2: 0, video_q3: 0, spend: 0, impressions: 0 };
-      map.set(id, {
-        video_views: prev.video_views + (row.video_views ?? 0),
-        video_starts: prev.video_starts + (row.video_starts ?? 0),
-        video_completions: prev.video_completions + (row.video_completions ?? 0),
-        video_q1: prev.video_q1 + (row.video_first_quartile_completions ?? 0),
-        video_q2: prev.video_q2 + (row.video_midpoint_completions ?? 0),
-        video_q3: prev.video_q3 + (row.video_third_quartile_completions ?? 0),
-        spend: prev.spend + (row.spend_eur ?? 0),
-        impressions: prev.impressions + (row.impressions ?? 0),
-      });
-    }
-    return map;
-  }, [filteredAdRows]);
+  const campaignVideoTotals = useMemo(() => buildCampaignVideoTotals(filteredAdRows), [filteredAdRows]);
 
   // ── Loading / Error states ────────────────────────────────────────────────
   if (isLoading) {
@@ -392,8 +146,6 @@ export default function BOFUPage() {
     );
   }
 
-  const OBJECTIVES: Objective[] = ['All', 'Awareness', 'Engagement', 'Video Views'];
-
   return (
     <div className="content">
       {/* Page Header */}
@@ -447,54 +199,48 @@ export default function BOFUPage() {
 
           <SectionHeader>Key Metrics</SectionHeader>
           <div className="grid-5" style={{ marginBottom: '1rem' }}>
-            <MetricCard label="Spend" value={formatEURCompact(totalSpend)} />
-            <MetricCard label="Reach" value={formatNumber(totalReach)} />
+            <MetricCard label="Spend"       value={formatEURCompact(totalSpend)} />
+            <MetricCard label="Reach"       value={formatNumber(totalReach)} />
             <MetricCard label="Impressions" value={formatNumber(totalImpressions)} />
-            <MetricCard label="CPM" value={formatEUR(avgCPM)} />
-            <MetricCard label="CTR" value={formatPercent(avgCTR)} />
+            <MetricCard label="CPM"         value={formatEUR(avgCPM)} />
+            <MetricCard label="CTR"         value={formatPercent(avgCTR)} />
           </div>
           <div className="grid-4" style={{ marginBottom: '1rem' }}>
             <MetricCard label="Engagement Rate" value={formatPercent(avgEngRate)} />
-            <MetricCard label="Ads" value={formatNumber(totalAds)} />
-            <MetricCard label="Clicks" value={formatNumber(totalClicks)} />
-            <MetricCard label="CPC" value={formatEUR(avgCPC)} />
+            <MetricCard label="Ads"             value={formatNumber(totalAds)} />
+            <MetricCard label="Clicks"          value={formatNumber(totalClicks)} />
+            <MetricCard label="CPC"             value={formatEUR(avgCPC)} />
           </div>
           {/* BOFU-specific: Lead Gen KPIs */}
           <div className="grid-3" style={{ marginBottom: isVideoObjective ? '1rem' : '1.5rem' }}>
-            <MetricCard label="Leads" value={formatNumber(totalLeads)} />
-            <MetricCard label="CPL" value={formatEUR(avgCPL)} />
+            <MetricCard label="Leads"      value={formatNumber(totalLeads)} />
+            <MetricCard label="CPL"        value={formatEUR(avgCPL)} />
             <MetricCard label="Conv. Rate" value={`${convRate.toFixed(1)}%`} />
           </div>
           {isVideoObjective && (
             <div className="grid-5" style={{ marginBottom: '1.5rem' }}>
-              <MetricCard label="Video Views" value={formatNumber(totalVideoViews)} />
+              <MetricCard label="Video Views"  value={formatNumber(totalVideoViews)} />
               <MetricCard label="Video Starts" value={formatNumber(totalVideoStarts)} />
-              <MetricCard label="View Rate" value={formatPercent(avgViewRate)} />
-              <MetricCard label="Completions" value={formatNumber(totalVideoCompletions)} />
-              <MetricCard label="CPV" value={formatEUR(avgCPV)} />
+              <MetricCard label="View Rate"    value={formatPercent(avgViewRate)} />
+              <MetricCard label="Completions"  value={formatNumber(totalVideoCompletions)} />
+              <MetricCard label="CPV"          value={formatEUR(avgCPV)} />
             </div>
           )}
-          {isVideoObjective && (<>
+          {isVideoObjective && <>
             <div className="grid-5" style={{ marginBottom: '1.5rem' }}>
               <MetricCard label="25% Completions" value={formatNumber(totalVideoQ1)} />
               <MetricCard label="50% Completions" value={formatNumber(totalVideoQ2)} />
               <MetricCard label="75% Completions" value={formatNumber(totalVideoQ3)} />
-              <MetricCard label="CR%" value={formatPercent(videoCompletionRate)} />
+              <MetricCard label="CR%"             value={formatPercent(videoCompletionRate)} />
               <MetricCard label="Avg Watch Depth" value={formatPercent(avgWatchDepth)} />
             </div>
-          </>)}
+          </>}
 
           {/* Campaign Details */}
           {isVideoObjective ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', margin: '2rem 0 1rem', paddingBottom: '0.5rem', borderBottom: '2px solid var(--color-navy)' }}>
               <span className="section-header" style={{ margin: 0, border: 'none', paddingBottom: 0 }}>Campaign Details</span>
-              <div className="filter-group" style={{ margin: 0 }}>
-                <span className="filter-label" style={{ fontSize: 11, fontWeight: 700 }}>VIEW METRICS:</span>
-                <div className="filter-pills">
-                  <button className={`filter-pill ${videoMetricMode === 'general' ? 'active' : ''}`} onClick={() => setVideoMetricMode('general')} style={{ fontSize: 11, padding: '0.2rem 0.65rem' }}>General</button>
-                  <button className={`filter-pill ${videoMetricMode === 'video' ? 'active' : ''}`} onClick={() => setVideoMetricMode('video')} style={{ fontSize: 11, padding: '0.2rem 0.65rem' }}>Video Specific</button>
-                </div>
-              </div>
+              <VideoMetricToggle mode={videoMetricMode} onChange={setVideoMetricMode} />
             </div>
           ) : (
             <SectionHeader>Campaign Details</SectionHeader>
@@ -515,26 +261,23 @@ export default function BOFUPage() {
                 </thead>
                 <tbody>
                   {filteredCampaigns.map(c => {
-                    const m = c.latest_metric;
-                    const spend = m?.spend_eur ?? 0;
-                    const impressions = m?.impressions ?? 0;
-                    const clicks = m?.clicks ?? 0;
-                    const leads = m?.leads ?? 0;
-                    const cpm = impressions ? (spend / impressions) * 1000 : 0;
-                    const cpc = clicks ? spend / clicks : 0;
-                    const cpl = leads ? spend / leads : 0;
-                    const days = formatDays(computeDays(m?.date_range_start, c.status === 'ACTIVE' ? undefined : m?.date_range_end));
+                    const m           = c.latest_metric;
+                    const spend       = m?.spend_eur   ?? 0;
+                    const impressions = m?.impressions  ?? 0;
+                    const clicks      = m?.clicks       ?? 0;
+                    const leads       = m?.leads        ?? 0;
+                    const cpm         = impressions ? (spend / impressions) * 1000 : 0;
+                    const cpc         = clicks ? spend / clicks : 0;
+                    const cpl         = leads ? spend / leads : 0;
+                    const days        = formatDays(computeDays(m?.date_range_start, c.status === 'ACTIVE' ? undefined : m?.date_range_end));
 
                     if (isVideoObjective && videoMetricMode === 'video') {
                       const v = campaignVideoTotals.get(c.id) ?? { video_views: 0, video_starts: 0, video_completions: 0, video_q1: 0, video_q2: 0, video_q3: 0, spend: 0, impressions: 0 };
-                      const vImpr = v.impressions || impressions;
-                      const vViewRate = vImpr > 0 ? v.video_views / vImpr : 0;
-                      const vCPV = v.video_views > 0 ? v.spend / v.video_views : 0;
+                      const vImpr      = v.impressions || impressions;
+                      const vViewRate  = vImpr > 0 ? v.video_views / vImpr : 0;
+                      const vCPV       = v.video_views > 0 ? v.spend / v.video_views : 0;
                       const vComplRate = v.video_views > 0 ? v.video_completions / v.video_views : 0;
-                      const vDepth = v.video_views > 0
-                        ? ((v.video_views - v.video_q1) * 0.125 + (v.video_q1 - v.video_q2) * 0.375 +
-                           (v.video_q2 - v.video_q3) * 0.625 + (v.video_q3 - v.video_completions) * 0.875 + v.video_completions * 1.0) / v.video_views
-                        : 0;
+                      const vDepth     = computeWatchDepth(v.video_views, v.video_q1, v.video_q2, v.video_q3, v.video_completions);
                       return (
                         <tr key={c.id}>
                           <td>{c.name}</td>
@@ -555,7 +298,7 @@ export default function BOFUPage() {
                             const assets = aggregatedAssets.filter(a => a.campaign_id === c.id);
                             const { wDur, wViews } = assets.reduce((acc, a) => {
                               if (a.video_duration_seconds != null && a.video_views > 0) {
-                                acc.wDur += a.avg_watch_depth * a.video_duration_seconds * a.video_views;
+                                acc.wDur   += a.avg_watch_depth * a.video_duration_seconds * a.video_views;
                                 acc.wViews += a.video_views;
                               }
                               return acc;
@@ -607,30 +350,24 @@ export default function BOFUPage() {
                 const obj = c.objective as ObjKey;
                 if (!grouped[obj]) return;
                 grouped[obj].impressions += c.latest_metric?.impressions ?? 0;
-                grouped[obj].clicks += c.latest_metric?.clicks ?? 0;
+                grouped[obj].clicks      += c.latest_metric?.clicks      ?? 0;
               });
               const activeKeys = objKeys.filter(k => grouped[k].impressions > 0 || grouped[k].clicks > 0);
-              chartLabels = activeKeys;
-              chartColors = activeKeys.map(k => OBJECTIVE_COLORS[k]);
+              chartLabels    = activeKeys;
+              chartColors    = activeKeys.map(k => OBJECTIVE_COLORS[k]);
               impressionVals = activeKeys.map(k => grouped[k].impressions);
-              ctrVals = activeKeys.map(k => {
+              ctrVals        = activeKeys.map(k => {
                 const { clicks, impressions } = grouped[k];
                 return impressions > 0 ? parseFloat(((clicks / impressions) * 100).toFixed(3)) : 0;
               });
               chartTitle1 = 'Impressions by Objective';
               chartTitle2 = 'CTR by Objective';
             } else {
-              const shortLabel = (name: string) => {
-                const parts = name.split('_');
-                const meaningful = parts.filter(p => !/^\d{4}$/.test(p) && !/^\d{2}$/.test(p) && !p.includes('/'));
-                const label = meaningful.join(' ').trim() || name;
-                return label.length > 28 ? label.slice(0, 26) + '…' : label;
-              };
-              chartLabels = filteredCampaigns.map(c => shortLabel(c.name));
-              chartColors = filteredCampaigns.map(() => '#3B82F6');
+              chartLabels    = filteredCampaigns.map(c => shortLabel(c.name));
+              chartColors    = filteredCampaigns.map(() => '#3B82F6');
               impressionVals = filteredCampaigns.map(c => c.latest_metric?.impressions ?? 0);
-              ctrVals = filteredCampaigns.map(c => {
-                const clicks = c.latest_metric?.clicks ?? 0;
+              ctrVals        = filteredCampaigns.map(c => {
+                const clicks      = c.latest_metric?.clicks      ?? 0;
                 const impressions = c.latest_metric?.impressions ?? 0;
                 return impressions > 0 ? parseFloat(((clicks / impressions) * 100).toFixed(3)) : 0;
               });
@@ -669,330 +406,31 @@ export default function BOFUPage() {
           </ChartContainer>
 
           {/* ── Ad Performance by Asset ── */}
-          {isVideoObjective ? (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', margin: '2rem 0 1rem', paddingBottom: '0.5rem', borderBottom: '2px solid var(--color-navy)' }}>
-              <span className="section-header" style={{ margin: 0, border: 'none', paddingBottom: 0 }}>Ad Performance by Asset</span>
-              <div className="filter-group" style={{ margin: 0 }}>
-                <span className="filter-label" style={{ fontSize: 11, fontWeight: 700 }}>VIEW METRICS:</span>
-                <div className="filter-pills">
-                  <button className={`filter-pill ${videoMetricMode === 'general' ? 'active' : ''}`} onClick={() => setVideoMetricMode('general')} style={{ fontSize: 11, padding: '0.2rem 0.65rem' }}>General</button>
-                  <button className={`filter-pill ${videoMetricMode === 'video' ? 'active' : ''}`} onClick={() => setVideoMetricMode('video')} style={{ fontSize: 11, padding: '0.2rem 0.65rem' }}>Video Specific</button>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <SectionHeader>Ad Performance by Asset</SectionHeader>
-          )}
-
-          <div style={{ marginBottom: '0.5rem' }}>
-            <p style={{ fontSize: 12, color: '#5A6577' }}>
-              Aggregated lifetime metrics per ad creative, mapped to the LinkedIn Asset ID.
-              {selectedObjective !== 'All' && <> &nbsp;Showing: <strong>{selectedObjective}</strong> campaign ads</>}
-            </p>
-          </div>
-          <ChartContainer>
-            <div className="table-wrapper">
-              <table className="ad-asset-table">
-                <colgroup>
-                  <col style={{ width: 36 }} /><col style={{ width: 64 }} /><col style={{ width: 108 }} />
-                  <col style={{ width: 160 }} /><col style={{ width: 62 }} /><col style={{ width: 68 }} /><col style={{ width: 68 }} />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th style={{ width: 36, textAlign: 'center' }}>
-                      <input type="checkbox" title="Select / deselect all"
-                        checked={selectedAdKeys.size === aggregatedAssets.length && aggregatedAssets.length > 0}
-                        onChange={() => {
-                          if (selectedAdKeys.size === aggregatedAssets.length) clearAdSelection();
-                          else setSelectedAdKeys(new Set(aggregatedAssets.map(r => `${r.campaign_id}__${r.creative_id}`)));
-                        }}
-                      />
-                    </th>
-                    <th className="th-thumb">Preview</th>
-                    <th className="hide-md" onClick={() => handleSort('creative_id')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>Asset ID{renderSortIndicator('creative_id')}</th>
-                    <th onClick={() => handleSort('creative_name')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>Ad Name{renderSortIndicator('creative_name')}</th>
-                    <th className="hide-sm" onClick={() => handleSort('status')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>Status{renderSortIndicator('status')}</th>
-                    {!(isVideoObjective && videoMetricMode === 'video') && (<>
-                      <th className="th-num" onClick={() => handleSort('spend_eur')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Spend in Euros">Spend{renderSortIndicator('spend_eur')}</th>
-                      <th className="th-num" onClick={() => handleSort('impressions')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Total Impressions">Impr{renderSortIndicator('impressions')}</th>
-                    </>)}
-                    {isVideoObjective ? (
-                      videoMetricMode === 'video' ? (
-                        <>
-                          <th className="th-num-xs metric-swap-cell" onClick={() => handleSort('video_views')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Video Views">Views{renderSortIndicator('video_views')}</th>
-                          <th className="th-num-xs metric-swap-cell" style={{ whiteSpace: 'nowrap' }} title="View Rate">VR%</th>
-                          <th className="th-num-xs hide-md metric-swap-cell" onClick={() => handleSort('video_starts')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Video Starts">VS{renderSortIndicator('video_starts')}</th>
-                          <th className="th-num-xs hide-md metric-swap-cell" onClick={() => handleSort('video_first_quartile_completions')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="25% watched">25%{renderSortIndicator('video_first_quartile_completions')}</th>
-                          <th className="th-num-xs hide-md metric-swap-cell" onClick={() => handleSort('video_midpoint_completions')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="50% watched">50%{renderSortIndicator('video_midpoint_completions')}</th>
-                          <th className="th-num-xs hide-md metric-swap-cell" onClick={() => handleSort('video_third_quartile_completions')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="75% watched">75%{renderSortIndicator('video_third_quartile_completions')}</th>
-                          <th className="th-num-xs metric-swap-cell" onClick={() => handleSort('video_completions')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Completions">100%{renderSortIndicator('video_completions')}</th>
-                          <th className="th-num-xs metric-swap-cell" style={{ whiteSpace: 'nowrap' }} title="Completion Rate">CR%</th>
-                          <th className="th-num-xs metric-swap-cell" style={{ whiteSpace: 'nowrap' }} title="Cost Per View">CPV</th>
-                          <th className="th-num-xs metric-swap-cell" onClick={() => handleSort('avg_watch_depth')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Avg Watch Depth">AWD%{renderSortIndicator('avg_watch_depth')}</th>
-                        </>
-                      ) : (
-                        <>
-                          <th className="th-num-sm hide-lg metric-swap-cell" onClick={() => handleSort('reach')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>Reach{renderSortIndicator('reach')}</th>
-                          <th className="th-num-sm metric-swap-cell" onClick={() => handleSort('clicks')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>Clicks{renderSortIndicator('clicks')}</th>
-                          <th className="th-num metric-swap-cell" onClick={() => handleSort('ctr')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>CTR{renderSortIndicator('ctr')}</th>
-                          <th className="th-num metric-swap-cell" onClick={() => handleSort('cpm')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>CPM{renderSortIndicator('cpm')}</th>
-                          <th className="th-num-xs metric-swap-cell" onClick={() => handleSort('cpc')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>CPC{renderSortIndicator('cpc')}</th>
-                          <th className="th-num-sm hide-md metric-swap-cell" onClick={() => handleSort('engagements')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>Eng.{renderSortIndicator('engagements')}</th>
-                          <th className="th-num-sm hide-lg metric-swap-cell" onClick={() => handleSort('landing_page_clicks')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>LPC{renderSortIndicator('landing_page_clicks')}</th>
-                        </>
-                      )
-                    ) : (
-                      <>
-                        <th className="th-num hide-lg" onClick={() => handleSort('reach')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>Reach{renderSortIndicator('reach')}</th>
-                        <th className="th-num-sm" onClick={() => handleSort('clicks')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>Clicks{renderSortIndicator('clicks')}</th>
-                        <th className="th-num" onClick={() => handleSort('ctr')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>CTR{renderSortIndicator('ctr')}</th>
-                        <th className="th-num" onClick={() => handleSort('cpm')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>CPM{renderSortIndicator('cpm')}</th>
-                        <th className="th-num-xs" onClick={() => handleSort('cpc')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>CPC{renderSortIndicator('cpc')}</th>
-                        <th className="th-num-xs hide-md" onClick={() => handleSort('engagements')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>Eng.{renderSortIndicator('engagements')}</th>
-                        <th className="th-num-xs hide-lg" onClick={() => handleSort('landing_page_clicks')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>LPC{renderSortIndicator('landing_page_clicks')}</th>
-                      </>
-                    )}
-                    {!(isVideoObjective && videoMetricMode === 'video') && (
-                      <th className="th-num-xs" onClick={() => handleSort('days_running')} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title="Days running">Days{renderSortIndicator('days_running')}</th>
-                    )}
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedAssets.map(row => {
-                    const key = `${row.campaign_id}__${row.creative_id}`;
-                    const isChecked = selectedAdKeys.has(key);
-                    const numericId = row.creative_id.replace(/^urn:li:\w+:/, '');
-                    const cpm = row.impressions ? (row.spend_eur / row.impressions) * 1000 : 0;
-                    const cpc = row.clicks ? row.spend_eur / row.clicks : 0;
-                    return (
-                      <tr key={key} style={isChecked ? { background: '#F0F5FF' } : undefined}>
-                        <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
-                          <input type="checkbox" checked={isChecked} onChange={() => toggleAdSelection(key)} title={`Select "${row.creative_name}" to filter daily view`} />
-                        </td>
-                        <td className="td-thumb"><AssetThumbnail thumbnailUrl={row.thumbnail_url} creativeName={row.creative_name} creativeUrl={row.creative_url} /></td>
-                        <td className="td-asset-id hide-md"><code className="linkedin-id" title={row.creative_id}>{numericId}</code></td>
-                        <td className="td-ad-name">
-                          {row.creative_url ? (
-                            <a href={row.creative_url} target="_blank" rel="noopener noreferrer" className="creative-link" title={`Preview ad on LinkedIn: ${row.creative_name}`} style={{ textDecoration: 'none', color: 'inherit', display: 'inline' }}>
-                              <span className="td-ad-name-inner" style={{ color: 'var(--color-blue)', fontWeight: 500 }}>{row.creative_name}</span>
-                              <span style={{ fontSize: '11px', color: 'var(--color-blue)', marginLeft: '3px' }}>↗</span>
-                            </a>
-                          ) : (
-                            <div className="td-ad-name-inner" title={row.creative_name}>{row.creative_name}</div>
-                          )}
-                        </td>
-                        <td className="td-nowrap hide-sm">{row.status ? <Badge status={row.status === 'ACTIVE' ? 'ACTIVE' : row.status === 'COMPLETED' ? 'COMPLETED' : 'PAUSED'} /> : <span className="td-dash">—</span>}</td>
-                        {!(isVideoObjective && videoMetricMode === 'video') && (<>
-                          <td className="td-nowrap td-num">{formatEUR(row.spend_eur)}</td>
-                          <td className="td-nowrap td-num">{formatNumber(row.impressions)}</td>
-                        </>)}
-                        {isVideoObjective ? (
-                          videoMetricMode === 'video' ? (() => {
-                            const vViews = row.video_views ?? 0;
-                            const vStarts = row.video_starts ?? 0;
-                            const vQ1 = row.video_first_quartile_completions ?? 0;
-                            const vQ2 = row.video_midpoint_completions ?? 0;
-                            const vQ3 = row.video_third_quartile_completions ?? 0;
-                            const vCompl = row.video_completions ?? 0;
-                            const vViewRate = row.impressions > 0 ? vViews / row.impressions : 0;
-                            const vCPV = vViews > 0 ? row.spend_eur / vViews : 0;
-                            const vDepth = row.avg_watch_depth ?? 0;
-                            return (<>
-                              <td className="td-nowrap td-num metric-swap-cell">{formatNumber(vViews)}</td>
-                              <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vViewRate)}</td>
-                              <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vStarts)}</td>
-                              <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ1)}</td>
-                              <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ2)}</td>
-                              <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ3)}</td>
-                              <td className="td-nowrap td-num metric-swap-cell">{formatNumber(vCompl)}</td>
-                              <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vViews > 0 ? vCompl / vViews : 0)}</td>
-                              <td className="td-nowrap td-num metric-swap-cell">{formatEUR(vCPV)}</td>
-                              <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vDepth)}</td>
-                            </>);
-                          })() : (<>
-                            <td className="td-nowrap td-num hide-lg metric-swap-cell">{formatNumber(row.reach)}</td>
-                            <td className="td-nowrap td-num metric-swap-cell">{formatNumber(row.clicks)}</td>
-                            <td className="td-nowrap td-num metric-swap-cell">{formatPercent(row.ctr, 3)}</td>
-                            <td className="td-nowrap td-num metric-swap-cell">{formatEUR(cpm)}</td>
-                            <td className="td-nowrap td-num metric-swap-cell">{formatEUR(cpc)}</td>
-                            <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(row.engagements)}</td>
-                            <td className="td-nowrap td-num hide-lg metric-swap-cell">{formatNumber(row.landing_page_clicks)}</td>
-                          </>)
-                        ) : (<>
-                          <td className="td-nowrap td-num hide-lg">{formatNumber(row.reach)}</td>
-                          <td className="td-nowrap td-num">{formatNumber(row.clicks)}</td>
-                          <td className="td-nowrap td-num">{formatPercent(row.ctr, 3)}</td>
-                          <td className="td-nowrap td-num">{formatEUR(cpm)}</td>
-                          <td className="td-nowrap td-num">{formatEUR(cpc)}</td>
-                          <td className="td-nowrap td-num hide-md">{formatNumber(row.engagements)}</td>
-                          <td className="td-nowrap td-num hide-lg">{formatNumber(row.landing_page_clicks)}</td>
-                        </>)}
-                        {!(isVideoObjective && videoMetricMode === 'video') && <td className="td-nowrap td-num">{formatDays(row.days_running)}</td>}
-                      </tr>
-                    );
-                  })}
-                  {sortedAssets.length === 0 && (
-                    <tr><td colSpan={isVideoObjective && videoMetricMode === 'video' ? 16 : 14} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>No ad data available for the current selection.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </ChartContainer>
+          <AdAssetTable
+            sortedAssets={sortedAssets}
+            aggregatedAssets={aggregatedAssets}
+            selectedAdKeys={adTable.selectedAdKeys}
+            setSelectedAdKeys={adTable.setSelectedAdKeys}
+            clearAdSelection={adTable.clearAdSelection}
+            toggleAdSelection={adTable.toggleAdSelection}
+            handleSort={adTable.handleSort}
+            renderSortIndicator={adTable.renderSortIndicator}
+            isVideoObjective={isVideoObjective}
+            videoMetricMode={videoMetricMode}
+            setVideoMetricMode={setVideoMetricMode}
+            subtitle={<>Aggregated lifetime metrics per ad creative, mapped to the LinkedIn Asset ID.{selectedObjective !== 'All' && <> &nbsp;Showing: <strong>{selectedObjective}</strong> campaign ads</>}</>}
+          />
 
           {/* ── Daily Ad Performance ── */}
-          <div className="section-header-row" style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'flex-end', justifyContent: 'space-between' }}>
-            <span className="section-header" style={{ margin: 0, border: 'none', paddingBottom: 0 }}>Daily Ad Performance</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', flexWrap: 'wrap' }}>
-              {isVideoObjective && (
-                <div className="filter-group" style={{ margin: 0 }}>
-                  <span className="filter-label" style={{ fontSize: 11, fontWeight: 700 }}>VIEW METRICS:</span>
-                  <div className="filter-pills">
-                    <button className={`filter-pill ${videoMetricMode === 'general' ? 'active' : ''}`} onClick={() => setVideoMetricMode('general')} style={{ fontSize: 11, padding: '0.2rem 0.65rem' }}>General</button>
-                    <button className={`filter-pill ${videoMetricMode === 'video' ? 'active' : ''}`} onClick={() => setVideoMetricMode('video')} style={{ fontSize: 11, padding: '0.2rem 0.65rem' }}>Video Specific</button>
-                  </div>
-                </div>
-              )}
-              <DatePickerCalendar availableDates={availableDates} selectedDate={selectedDate} onSelect={setSelectedDate} onClear={() => setSelectedDate('')} />
-            </div>
-          </div>
-
-          <ChartContainer>
-            <div className="table-wrapper">
-              <table className="ad-asset-table">
-                <colgroup>
-                  <col style={{ width: 78 }} /><col style={{ width: 64 }} /><col style={{ width: 108 }} />
-                  <col style={{ width: 160 }} /><col style={{ width: 62 }} /><col style={{ width: 68 }} /><col style={{ width: 68 }} /><col style={{ width: 68 }} />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th style={{ width: 78 }}>Date</th>
-                    <th className="th-thumb">Preview</th>
-                    <th className="hide-md" style={{ width: 88 }}>Asset ID</th>
-                    <th>Ad Name</th>
-                    <th className="hide-sm">Status</th>
-                    {!(isVideoObjective && videoMetricMode === 'video') && (<>
-                      <th className="th-num" title="Spend in Euros">Spend</th>
-                      <th className="th-num" title="Impressions">Impr.</th>
-                    </>)}
-                    {isVideoObjective ? (
-                      videoMetricMode === 'video' ? (
-                        <>
-                          <th className="th-num-xs metric-swap-cell" title="Video Views">Views</th>
-                          <th className="th-num-xs metric-swap-cell" title="View Rate">VR%</th>
-                          <th className="th-num-xs hide-md metric-swap-cell" title="Video Starts">VS</th>
-                          <th className="th-num-xs hide-md metric-swap-cell" title="25% watched">25%</th>
-                          <th className="th-num-xs hide-md metric-swap-cell" title="50% watched">50%</th>
-                          <th className="th-num-xs hide-md metric-swap-cell" title="75% watched">75%</th>
-                          <th className="th-num-xs metric-swap-cell" title="Completions">100%</th>
-                          <th className="th-num-xs metric-swap-cell" title="Completion Rate">CR%</th>
-                          <th className="th-num-xs metric-swap-cell" title="Cost Per View">CPV</th>
-                          <th className="th-num-xs metric-swap-cell" title="Avg Watch Depth">AWD%</th>
-                        </>
-                      ) : (
-                        <>
-                          <th className="th-num hide-lg metric-swap-cell" title="Reach">Reach</th>
-                          <th className="th-num-sm metric-swap-cell" title="Clicks">Clicks</th>
-                          <th className="th-num metric-swap-cell" title="CTR">CTR</th>
-                          <th className="th-num metric-swap-cell" title="CPM">CPM</th>
-                          <th className="th-num-xs metric-swap-cell" title="CPC">CPC</th>
-                          <th className="th-num-xs hide-md metric-swap-cell" title="Engagements">Eng.</th>
-                          <th className="th-num-xs hide-lg metric-swap-cell" title="Landing Page Clicks">LPC</th>
-                        </>
-                      )
-                    ) : (
-                      <>
-                        <th className="th-num hide-lg" title="Reach">Reach</th>
-                        <th className="th-num-sm" title="Clicks">Clicks</th>
-                        <th className="th-num" title="CTR">CTR</th>
-                        <th className="th-num" title="CPM">CPM</th>
-                        <th className="th-num-xs" title="CPC">CPC</th>
-                        <th className="th-num-xs hide-md" title="Engagements">Eng.</th>
-                        <th className="th-num-xs hide-lg" title="Landing Page Clicks">LPC</th>
-                      </>
-                    )}
-                  </tr>
-                </thead>
-                <tbody>
-                  {dailyAdRows.map((row) => {
-                    const numericId = row.creative_id.replace(/^urn:li:\w+:/, '');
-                    const spend = row.spend_eur ?? 0;
-                    const impressions = row.impressions ?? 0;
-                    const clicks = row.clicks ?? 0;
-                    const cpm = impressions ? (spend / impressions) * 1000 : 0;
-                    const cpc = clicks ? spend / clicks : 0;
-                    return (
-                      <tr key={`${row.campaign_id}-${row.creative_id}-${row.date}`}>
-                        <td className="td-nowrap">{new Date(row.date).toLocaleDateString('en-GB')}</td>
-                        <td className="td-thumb"><AssetThumbnail thumbnailUrl={row.thumbnail_url} creativeName={row.creative_name} creativeUrl={row.creative_url} /></td>
-                        <td className="td-asset-id hide-md"><code className="linkedin-id" title={row.creative_id}>{numericId}</code></td>
-                        <td className="td-ad-name">
-                          {row.creative_url ? (
-                            <a href={row.creative_url} target="_blank" rel="noopener noreferrer" className="creative-link" title={`Preview ad on LinkedIn: ${row.creative_name}`} style={{ textDecoration: 'none', color: 'inherit', display: 'inline' }}>
-                              <span className="td-ad-name-inner" style={{ color: 'var(--color-blue)', fontWeight: 500 }}>{row.creative_name}</span>
-                              <span style={{ fontSize: '11px', color: 'var(--color-blue)', marginLeft: '3px' }}>↗</span>
-                            </a>
-                          ) : (
-                            <div className="td-ad-name-inner" title={row.creative_name}>{row.creative_name}</div>
-                          )}
-                        </td>
-                        <td className="td-nowrap hide-sm">{row.status ? <Badge status={row.status === 'ACTIVE' ? 'ACTIVE' : row.status === 'COMPLETED' ? 'COMPLETED' : 'PAUSED'} /> : <span className="td-dash">—</span>}</td>
-                        {!(isVideoObjective && videoMetricMode === 'video') && (<>
-                          <td className="td-nowrap td-num">{formatEUR(spend)}</td>
-                          <td className="td-nowrap td-num">{formatNumber(impressions)}</td>
-                        </>)}
-                        {isVideoObjective ? (
-                          videoMetricMode === 'video' ? (() => {
-                            const vViews = row.video_views ?? 0;
-                            const vStarts = row.video_starts ?? 0;
-                            const vQ1 = row.video_first_quartile_completions ?? 0;
-                            const vQ2 = row.video_midpoint_completions ?? 0;
-                            const vQ3 = row.video_third_quartile_completions ?? 0;
-                            const vCompl = row.video_completions ?? 0;
-                            const vViewRate = impressions > 0 ? vViews / impressions : 0;
-                            const vCPV = vViews > 0 ? spend / vViews : 0;
-                            const vDepth = vViews > 0
-                              ? ((vViews - vQ1) * 0.125 + (vQ1 - vQ2) * 0.375 + (vQ2 - vQ3) * 0.625 + (vQ3 - vCompl) * 0.875 + vCompl * 1.0) / vViews
-                              : 0;
-                            return (<>
-                              <td className="td-nowrap td-num metric-swap-cell">{formatNumber(vViews)}</td>
-                              <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vViewRate)}</td>
-                              <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vStarts)}</td>
-                              <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ1)}</td>
-                              <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ2)}</td>
-                              <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(vQ3)}</td>
-                              <td className="td-nowrap td-num metric-swap-cell">{formatNumber(vCompl)}</td>
-                              <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vViews > 0 ? vCompl / vViews : 0)}</td>
-                              <td className="td-nowrap td-num metric-swap-cell">{formatEUR(vCPV)}</td>
-                              <td className="td-nowrap td-num metric-swap-cell">{formatPercent(vDepth)}</td>
-                            </>);
-                          })() : (<>
-                            <td className="td-nowrap td-num hide-lg metric-swap-cell">{formatNumber(row.reach ?? 0)}</td>
-                            <td className="td-nowrap td-num metric-swap-cell">{formatNumber(clicks)}</td>
-                            <td className="td-nowrap td-num metric-swap-cell">{formatPercent(row.ctr ?? 0, 3)}</td>
-                            <td className="td-nowrap td-num metric-swap-cell">{formatEUR(cpm)}</td>
-                            <td className="td-nowrap td-num metric-swap-cell">{formatEUR(cpc)}</td>
-                            <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(row.engagements ?? 0)}</td>
-                            <td className="td-nowrap td-num hide-lg metric-swap-cell">{formatNumber(row.landing_page_clicks ?? 0)}</td>
-                          </>)
-                        ) : (<>
-                          <td className="td-nowrap td-num hide-lg">{formatNumber(row.reach ?? 0)}</td>
-                          <td className="td-nowrap td-num">{formatNumber(clicks)}</td>
-                          <td className="td-nowrap td-num">{formatPercent(row.ctr ?? 0, 3)}</td>
-                          <td className="td-nowrap td-num">{formatEUR(cpm)}</td>
-                          <td className="td-nowrap td-num">{formatEUR(cpc)}</td>
-                          <td className="td-nowrap td-num hide-md">{formatNumber(row.engagements ?? 0)}</td>
-                          <td className="td-nowrap td-num hide-lg">{formatNumber(row.landing_page_clicks ?? 0)}</td>
-                        </>)}
-                      </tr>
-                    );
-                  })}
-                  {dailyAdRows.length === 0 && (
-                    <tr><td colSpan={isVideoObjective && videoMetricMode === 'video' ? 15 : 13} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>No daily ad performance rows for the current selection.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </ChartContainer>
+          <DailyAdTable
+            dailyAdRows={dailyAdRows}
+            availableDates={availableDates}
+            selectedDate={selectedDate}
+            setSelectedDate={setSelectedDate}
+            isVideoObjective={isVideoObjective}
+            videoMetricMode={videoMetricMode}
+            setVideoMetricMode={setVideoMetricMode}
+          />
         </>
       )}
 
