@@ -457,6 +457,8 @@ const CREATIVE_ANALYTICS_FIELDS = [
   'costInLocalCurrency',
   'totalEngagements',
   'landingPageClicks',
+  'externalWebsiteConversions',
+  'oneClickLeads',
   'videoViews',
   'videoCompletions',
   'videoStarts',
@@ -910,14 +912,15 @@ function getReach(stat: Record<string, unknown>) {
   return getNumberMetric(stat, 'approximateMemberReach');
 }
 
-function getLeadCount(stat: Record<string, unknown>) {
-  const websiteConversions = getNumberMetric(stat, 'externalWebsiteConversions');
-  const leadFormSubmissions = LEAD_FORM_ANALYTICS_FIELDS.reduce(
+function getLeadFormCount(stat: Record<string, unknown>) {
+  return LEAD_FORM_ANALYTICS_FIELDS.reduce(
     (total, field) => total + getNumberMetric(stat, field),
     0
   );
+}
 
-  return websiteConversions + leadFormSubmissions;
+function getWebsiteConversionsCount(stat: Record<string, unknown>) {
+  return getNumberMetric(stat, 'externalWebsiteConversions');
 }
 
 function getErrorMessage(error: unknown) {
@@ -1302,7 +1305,8 @@ serve(async (req) => {
           const clicks = Number(stat.clicks) || 0;
           const spend = Number(stat.costInLocalCurrency) || 0;
           const reach = getReach(stat);
-          const leads = getLeadCount(stat);
+          const conversions = getWebsiteConversionsCount(stat);
+          const leads = getLeadFormCount(stat);
           const cpm = impressions > 0 ? (spend / impressions) * 1000 : 0;
           const cpc = clicks > 0 ? spend / clicks : 0;
           const cpl = leads > 0 ? spend / leads : 0;
@@ -1320,6 +1324,7 @@ serve(async (req) => {
             cpm_inr: cpm,
             cpc_inr: cpc,
             cpl_inr: cpl,
+            conversions,
             leads,
           };
         });
@@ -1388,6 +1393,8 @@ serve(async (req) => {
             const date = `${dr.start.year}-${String(dr.start.month).padStart(2, '0')}-${String(dr.start.day).padStart(2, '0')}`;
             const impressions = Number(stat.impressions) || 0;
             const clicks = Number(stat.clicks) || 0;
+            const conversions = getWebsiteConversionsCount(stat);
+            const leads = getLeadFormCount(stat);
             return {
               campaign_id: dbCampaign.id,
               creative_id: creative.id,
@@ -1401,6 +1408,8 @@ serve(async (req) => {
               ctr: impressions > 0 ? clicks / impressions : 0,
               engagements: Number(stat.totalEngagements) || clicks,
               landing_page_clicks: Number(stat.landingPageClicks) || 0,
+              conversions,
+              leads,
               reference: resolvedReference,
               creative_url: resolvedCreativeUrl,
               thumbnail_url: thumbnailUrl,

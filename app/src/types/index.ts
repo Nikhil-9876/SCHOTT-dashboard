@@ -30,6 +30,7 @@ export interface CampaignMetric {
   cpm_inr: number | null;
   cpc_inr: number | null;
   cpl_inr: number | null;
+  conversions: number | null;
   leads: number | null;
   video_views: number | null;
   video_completions: number | null;
@@ -62,6 +63,8 @@ export interface AdPerformanceMetric {
   ctr: number | null;
   engagements: number | null;
   landing_page_clicks: number | null;
+  conversions: number | null;
+  leads: number | null;
   reference: string | null;
   creative_url: string | null;
   thumbnail_url: string | null;

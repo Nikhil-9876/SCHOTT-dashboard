@@ -15,7 +15,6 @@ const NAVY = '#062E62';
 const BLUE = '#0050FF';
 const SKY = '#3B82F6';
 const SLATE = '#8FADC9';
-const TEAL = '#0891B2';
 const BRAND = [NAVY, '#0A3D7A', '#0050CC', BLUE, '#2B6CB0', SKY, '#60A5FA', SLATE, '#A8C5DC', '#C5D9E8'];
 const palette = (n: number) => Array.from({ length: n }, (_, i) => BRAND[i % BRAND.length]);
 
@@ -225,18 +224,6 @@ function WorldMapChart({ codes, values, height = 380 }: {
   return <Plot data={data} layout={layout} config={CHART_CONFIG} style={{ width: '100%' }} useResizeHandler />;
 }
 
-function VBarChart({ labels, values, colors, height = 260, textFormat }: {
-  labels: string[]; values: number[]; colors?: string[]; height?: number; textFormat?: (v: number) => string;
-}) {
-  const data: Plotly.Data[] = [{
-    type: 'bar', x: labels, y: values,
-    marker: { color: colors ?? palette(labels.length) },
-    text: values.map(v => textFormat ? textFormat(v) : v.toLocaleString()),
-    textposition: 'outside', textfont: { size: 13, color: NAVY },
-  }];
-  const layout: Partial<Plotly.Layout> = { ...CHART_LAYOUT_BASE, height, bargap: 0.35, margin: { l: 50, r: 20, t: 30, b: 50 } };
-  return <Plot data={data} layout={layout} config={CHART_CONFIG} style={{ width: '100%' }} useResizeHandler />;
-}
 
 function SectionLabel({ title, question }: {
   title: string; question: string;

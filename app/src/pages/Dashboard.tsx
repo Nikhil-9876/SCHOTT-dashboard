@@ -81,6 +81,7 @@ export default function Dashboard() {
   const totalReach = sumMetric(all, 'reach');
   const totalImpressions = sumMetric(all, 'impressions');
   const totalClicks = sumMetric(all, 'clicks');
+  const totalConversions = sumMetric(all, 'conversions');
   const totalLeads = sumMetric(all, 'leads');
   const avgCTR = totalImpressions ? totalClicks / totalImpressions : 0;
 
@@ -110,7 +111,7 @@ export default function Dashboard() {
           detail="Total audience reached across campaigns"
         />
       </div>
-      <div className="grid-4" style={{ marginBottom: '1.5rem' }}>
+      <div className="grid-5" style={{ marginBottom: '1.5rem' }}>
         <SummaryCard
           label="Ads"
           value={totalAds}
@@ -127,9 +128,14 @@ export default function Dashboard() {
           detail={`CTR ${formatPercent(avgCTR)}`}
         />
         <SummaryCard
+          label="Website Conversions"
+          value={formatNumber(totalConversions)}
+          detail="Webinar registrations & website tags"
+        />
+        <SummaryCard
           label="Leads"
           value={formatNumber(totalLeads)}
-          detail="Website conversions reported by LinkedIn"
+          detail="LinkedIn Lead Gen Form fills"
         />
       </div>
 
@@ -146,7 +152,7 @@ export default function Dashboard() {
           variant="mofu"
           tag="MOFU"
           title="FIOLAX Insight"
-          description="Web Traffic &amp; Lead Gen"
+          description="Web Traffic &amp; Conversions"
           route="/mofu"
         />
         <FunnelCard

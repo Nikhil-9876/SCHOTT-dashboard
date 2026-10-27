@@ -78,6 +78,7 @@ export default function MOFUPage() {
   const totalReach       = sum(filteredCampaigns, 'reach');
   const totalImpressions = sum(filteredCampaigns, 'impressions');
   const totalClicks      = sum(filteredCampaigns, 'clicks');
+  const totalConversions = sum(filteredCampaigns, 'conversions');
   const totalLeads       = sum(filteredCampaigns, 'leads');
   const avgCPM           = totalImpressions ? (totalSpend / totalImpressions) * 1000 : 0;
   const avgCPC           = totalClicks ? totalSpend / totalClicks : 0;
@@ -207,9 +208,10 @@ export default function MOFUPage() {
             <MetricCard label="CPC"             value={formatEUR(avgCPC)} />
           </div>
           {/* MOFU specific KPIs */}
-          <div className="grid-3" style={{ marginBottom: '1.5rem' }}>
+          <div className="grid-4" style={{ marginBottom: '1.5rem' }}>
             <MetricCard label="Landing Page Clicks" value={formatNumber(totalLPC)} />
             <MetricCard label="Cost / LPC"          value={formatEUR(avgCostPerLPC)} />
+            <MetricCard label="Website Conversions" value={formatNumber(totalConversions)} />
             <MetricCard label="Leads"               value={formatNumber(totalLeads)} />
           </div>
 
@@ -229,7 +231,8 @@ export default function MOFUPage() {
                     <th className="td-num" title="Cost Per Mille">CPM</th>
                     <th className="td-num" title="Cost Per Click">CPC</th>
                     <th className="td-num" title="Landing Page Clicks">LPC</th>
-                    <th className="td-num" title="Leads">Leads</th>
+                    <th className="td-num" title="Website Conversions / Registrations reported by LinkedIn">Conv.</th>
+                    <th className="td-num" title="LinkedIn Lead Gen Form fills">Leads</th>
                     <th className="td-num" title="Days running">Days</th>
                   </tr>
                 </thead>
@@ -257,6 +260,7 @@ export default function MOFUPage() {
                         <td className="td-nowrap td-num">{formatEUR(cpm)}</td>
                         <td className="td-nowrap td-num">{formatEUR(cpc)}</td>
                         <td className="td-nowrap td-num">{formatNumber(campLPC)}</td>
+                        <td className="td-nowrap td-num">{formatNumber(m?.conversions ?? 0)}</td>
                         <td className="td-nowrap td-num">{formatNumber(m?.leads ?? 0)}</td>
                         <td className="td-nowrap td-num">{days}</td>
                       </tr>

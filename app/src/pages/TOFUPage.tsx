@@ -19,7 +19,6 @@ import Footer from '../components/layout/Footer';
 import { SkeletonCard, SkeletonChart } from '../components/ui/Skeleton';
 import VideoMetricToggle from '../components/ui/VideoMetricToggle';
 import { AdAssetTable, DailyAdTable } from '../components/ui/FunnelTables';
-import type { CampaignWithMetrics } from '../types';
 
 // Re-export so MOFUPage can import it without a circular dep
 export { isWebsiteVisitsCampaign };
@@ -98,9 +97,6 @@ export default function TOFUPage() {
 
   // ── Per-campaign video totals (for campaign details table) ────────────────
   const campaignVideoTotals = useMemo(() => buildCampaignVideoTotals(filteredAdRows), [filteredAdRows]);
-
-  // ── Column visibility in ad asset table ──────────────────────────────────
-  const showCampaignCol = filteredCampaigns.length > 1;
 
   // ── Loading / Error states ────────────────────────────────────────────────
   if (isLoading) {
@@ -259,7 +255,7 @@ export default function TOFUPage() {
                     {isVideoObjective && videoMetricMode === 'video' ? (
                       <><th className="td-num" title="Total Video Views">Video Views</th><th className="td-num" title="Video View Rate (Views / Impressions)">VR%</th><th className="td-num" title="Video Starts">VS</th><th className="td-num" title="25% of video watched">25%</th><th className="td-num" title="50% of video watched">50%</th><th className="td-num" title="75% of video watched">75%</th><th className="td-num" title="Video Completions (count of viewers who watched 100%)">100%</th><th className="td-num" title="Completion Rate (completions / video views)">CR%</th><th className="td-num" title="Cost Per View">CPV</th><th className="td-num" title="Average Watch Depth — estimated average % of video watched per viewer">AWD%</th></>
                     ) : (
-                      <><th className="td-num" title="Total Unique Reach">Reach</th><th className="td-num">Clicks</th><th className="td-num" title="Click-Through Rate">CTR</th><th className="td-num" title="Cost Per Mille (Cost Per Thousand Impressions)">CPM</th><th className="td-num" title="Cost Per Click">CPC</th><th className="td-num">Leads</th><th className="td-num" title="Number of days the campaign has been or was running">Days</th></>
+                      <><th className="td-num" title="Total Unique Reach">Reach</th><th className="td-num">Clicks</th><th className="td-num" title="Click-Through Rate">CTR</th><th className="td-num" title="Cost Per Mille (Cost Per Thousand Impressions)">CPM</th><th className="td-num" title="Cost Per Click">CPC</th><th className="td-num" title="Website Conversions / Registrations">Conv.</th><th className="td-num" title="LinkedIn Lead Gen Form fills">Leads</th><th className="td-num" title="Number of days the campaign has been or was running">Days</th></>
                     )}
                   </tr>
                 </thead>
@@ -324,6 +320,7 @@ export default function TOFUPage() {
                         <td className="td-nowrap td-num">{formatPercent(m?.ctr ?? 0)}</td>
                         <td className="td-nowrap td-num">{formatEUR(cpm)}</td>
                         <td className="td-nowrap td-num">{formatEUR(cpc)}</td>
+                        <td className="td-nowrap td-num">{formatNumber(m?.conversions ?? 0)}</td>
                         <td className="td-nowrap td-num">{formatNumber(m?.leads ?? 0)}</td>
                         <td className="td-nowrap td-num">{days}</td>
                       </tr>

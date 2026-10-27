@@ -75,6 +75,7 @@ export default function BOFUPage() {
   const totalReach       = sum(filteredCampaigns, 'reach');
   const totalImpressions = sum(filteredCampaigns, 'impressions');
   const totalClicks      = sum(filteredCampaigns, 'clicks');
+  const totalConversions = sum(filteredCampaigns, 'conversions');
   const totalLeads       = sum(filteredCampaigns, 'leads');
   const avgCPM           = totalImpressions ? (totalSpend / totalImpressions) * 1000 : 0;
   const avgCPC           = totalClicks ? totalSpend / totalClicks : 0;
@@ -212,10 +213,11 @@ export default function BOFUPage() {
             <MetricCard label="CPC"             value={formatEUR(avgCPC)} />
           </div>
           {/* BOFU-specific: Lead Gen KPIs */}
-          <div className="grid-3" style={{ marginBottom: isVideoObjective ? '1rem' : '1.5rem' }}>
-            <MetricCard label="Leads"      value={formatNumber(totalLeads)} />
-            <MetricCard label="CPL"        value={formatEUR(avgCPL)} />
-            <MetricCard label="Conv. Rate" value={`${convRate.toFixed(1)}%`} />
+          <div className="grid-4" style={{ marginBottom: isVideoObjective ? '1rem' : '1.5rem' }}>
+            <MetricCard label="Leads"               value={formatNumber(totalLeads)} />
+            <MetricCard label="Website Conversions" value={formatNumber(totalConversions)} />
+            <MetricCard label="CPL"                 value={formatEUR(avgCPL)} />
+            <MetricCard label="Lead Conv. Rate"     value={`${convRate.toFixed(1)}%`} />
           </div>
           {isVideoObjective && (
             <div className="grid-5" style={{ marginBottom: '1.5rem' }}>
@@ -255,7 +257,7 @@ export default function BOFUPage() {
                     {isVideoObjective && videoMetricMode === 'video' ? (
                       <><th className="td-num" title="Video Views">Video Views</th><th className="td-num" title="View Rate">VR%</th><th className="td-num" title="Video Starts">VS</th><th className="td-num" title="25% watched">25%</th><th className="td-num" title="50% watched">50%</th><th className="td-num" title="75% watched">75%</th><th className="td-num" title="Completions">100%</th><th className="td-num" title="Completion Rate">CR%</th><th className="td-num" title="Cost Per View">CPV</th><th className="td-num" title="Avg Watch Depth">AWD%</th></>
                     ) : (
-                      <><th className="td-num" title="Reach">Reach</th><th className="td-num">Clicks</th><th className="td-num" title="CTR">CTR</th><th className="td-num" title="CPM">CPM</th><th className="td-num" title="CPC">CPC</th><th className="td-num">Leads</th><th className="td-num" title="CPL">CPL</th><th className="td-num" title="Days running">Days</th></>
+                      <><th className="td-num" title="Reach">Reach</th><th className="td-num">Clicks</th><th className="td-num" title="CTR">CTR</th><th className="td-num" title="CPM">CPM</th><th className="td-num" title="CPC">CPC</th><th className="td-num" title="Website Conversions">Conv.</th><th className="td-num" title="LinkedIn Lead Gen Form fills">Leads</th><th className="td-num" title="CPL">CPL</th><th className="td-num" title="Days running">Days</th></>
                     )}
                   </tr>
                 </thead>
@@ -265,6 +267,7 @@ export default function BOFUPage() {
                     const spend       = m?.spend_eur   ?? 0;
                     const impressions = m?.impressions  ?? 0;
                     const clicks      = m?.clicks       ?? 0;
+                    const conversions = m?.conversions  ?? 0;
                     const leads       = m?.leads        ?? 0;
                     const cpm         = impressions ? (spend / impressions) * 1000 : 0;
                     const cpc         = clicks ? spend / clicks : 0;
@@ -322,6 +325,7 @@ export default function BOFUPage() {
                         <td className="td-nowrap td-num">{formatPercent(m?.ctr ?? 0)}</td>
                         <td className="td-nowrap td-num">{formatEUR(cpm)}</td>
                         <td className="td-nowrap td-num">{formatEUR(cpc)}</td>
+                        <td className="td-nowrap td-num">{formatNumber(conversions)}</td>
                         <td className="td-nowrap td-num">{formatNumber(leads)}</td>
                         <td className="td-nowrap td-num">{formatEUR(cpl)}</td>
                         <td className="td-nowrap td-num">{days}</td>

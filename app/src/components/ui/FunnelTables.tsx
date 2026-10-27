@@ -169,6 +169,8 @@ export function AdAssetTable({
                       <SortTh className="th-num-xs metric-swap-cell" onClick={() => handleSort('cpc')}>CPC{renderSortIndicator('cpc')}</SortTh>
                       <SortTh className="th-num-sm hide-md metric-swap-cell" onClick={() => handleSort('engagements')}>Eng.{renderSortIndicator('engagements')}</SortTh>
                       <SortTh className="th-num-sm hide-lg metric-swap-cell" onClick={() => handleSort('landing_page_clicks')}>LPC{renderSortIndicator('landing_page_clicks')}</SortTh>
+                      <SortTh className="th-num-xs metric-swap-cell" title="Website Conversions (landing page registrations & actions)" onClick={() => handleSort('conversions')}>Conv.{renderSortIndicator('conversions')}</SortTh>
+                      <SortTh className="th-num-xs metric-swap-cell" title="Leads (LinkedIn Lead Gen Form fills)" onClick={() => handleSort('leads')}>Leads{renderSortIndicator('leads')}</SortTh>
                     </>
                   )
                 ) : (
@@ -180,6 +182,8 @@ export function AdAssetTable({
                     <SortTh className="th-num-xs" onClick={() => handleSort('cpc')}>CPC{renderSortIndicator('cpc')}</SortTh>
                     <SortTh className="th-num-xs hide-md" onClick={() => handleSort('engagements')}>Eng.{renderSortIndicator('engagements')}</SortTh>
                     <SortTh className="th-num-xs hide-lg" onClick={() => handleSort('landing_page_clicks')}>LPC{renderSortIndicator('landing_page_clicks')}</SortTh>
+                    <SortTh className="th-num-xs" title="Website Conversions (landing page registrations & actions)" onClick={() => handleSort('conversions')}>Conv.{renderSortIndicator('conversions')}</SortTh>
+                    <SortTh className="th-num-xs" title="Leads (LinkedIn Lead Gen Form fills)" onClick={() => handleSort('leads')}>Leads{renderSortIndicator('leads')}</SortTh>
                   </>
                 )}
                 {!isVideoMode && (
@@ -240,6 +244,8 @@ export function AdAssetTable({
                         <td className="td-nowrap td-num metric-swap-cell">{formatEUR(cpc)}</td>
                         <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(row.engagements)}</td>
                         <td className="td-nowrap td-num hide-lg metric-swap-cell">{formatNumber(row.landing_page_clicks)}</td>
+                        <td className="td-nowrap td-num metric-swap-cell">{formatNumber(row.conversions ?? 0)}</td>
+                        <td className="td-nowrap td-num metric-swap-cell">{formatNumber(row.leads ?? 0)}</td>
                       </>)
                     ) : (<>
                       <td className="td-nowrap td-num hide-lg">{formatNumber(row.reach)}</td>
@@ -249,13 +255,15 @@ export function AdAssetTable({
                       <td className="td-nowrap td-num">{formatEUR(cpc)}</td>
                       <td className="td-nowrap td-num hide-md">{formatNumber(row.engagements)}</td>
                       <td className="td-nowrap td-num hide-lg">{formatNumber(row.landing_page_clicks)}</td>
+                      <td className="td-nowrap td-num">{formatNumber(row.conversions ?? 0)}</td>
+                      <td className="td-nowrap td-num">{formatNumber(row.leads ?? 0)}</td>
                     </>)}
                     {!isVideoMode && <td className="td-nowrap td-num">{formatDays(row.days_running)}</td>}
                   </tr>
                 );
               })}
               {sortedAssets.length === 0 && (
-                <tr><td colSpan={isVideoMode ? 16 : 14} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>No ad data available for the current selection.</td></tr>
+                <tr><td colSpan={isVideoMode ? 15 : 17} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>No ad data available for the current selection.</td></tr>
               )}
             </tbody>
           </table>
@@ -343,6 +351,8 @@ export function DailyAdTable({
                       <th className="th-num-xs metric-swap-cell" title="Cost Per Click">CPC</th>
                       <th className="th-num-xs hide-md metric-swap-cell" title="Total Engagements">Eng.</th>
                       <th className="th-num-xs hide-lg metric-swap-cell" title="Landing Page Clicks">LPC</th>
+                      <th className="th-num-xs metric-swap-cell" title="Website Conversions (landing page registrations & actions)">Conv.</th>
+                      <th className="th-num-xs metric-swap-cell" title="Leads (LinkedIn Lead Gen Form fills)">Leads</th>
                     </>
                   )
                 ) : (
@@ -354,6 +364,8 @@ export function DailyAdTable({
                     <th className="th-num-xs" title="Cost Per Click">CPC</th>
                     <th className="th-num-xs hide-md" title="Total Engagements">Eng.</th>
                     <th className="th-num-xs hide-lg" title="Landing Page Clicks">LPC</th>
+                    <th className="th-num-xs" title="Website Conversions (landing page registrations & actions)">Conv.</th>
+                    <th className="th-num-xs" title="Leads (LinkedIn Lead Gen Form fills)">Leads</th>
                   </>
                 )}
               </tr>
@@ -410,6 +422,8 @@ export function DailyAdTable({
                         <td className="td-nowrap td-num metric-swap-cell">{formatEUR(cpc)}</td>
                         <td className="td-nowrap td-num hide-md metric-swap-cell">{formatNumber(row.engagements ?? 0)}</td>
                         <td className="td-nowrap td-num hide-lg metric-swap-cell">{formatNumber(row.landing_page_clicks ?? 0)}</td>
+                        <td className="td-nowrap td-num metric-swap-cell">{formatNumber(row.conversions ?? 0)}</td>
+                        <td className="td-nowrap td-num metric-swap-cell">{formatNumber(row.leads ?? 0)}</td>
                       </>)
                     ) : (<>
                       <td className="td-nowrap td-num hide-lg">{formatNumber(row.reach ?? 0)}</td>
@@ -419,12 +433,14 @@ export function DailyAdTable({
                       <td className="td-nowrap td-num">{formatEUR(cpc)}</td>
                       <td className="td-nowrap td-num hide-md">{formatNumber(row.engagements ?? 0)}</td>
                       <td className="td-nowrap td-num hide-lg">{formatNumber(row.landing_page_clicks ?? 0)}</td>
+                      <td className="td-nowrap td-num">{formatNumber(row.conversions ?? 0)}</td>
+                      <td className="td-nowrap td-num">{formatNumber(row.leads ?? 0)}</td>
                     </>)}
                   </tr>
                 );
               })}
               {dailyAdRows.length === 0 && (
-                <tr><td colSpan={isVideoMode ? 15 : 13} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>No daily ad performance rows for the current selection.</td></tr>
+                <tr><td colSpan={isVideoMode ? 15 : 16} style={{ textAlign: 'center', color: '#5A6577', padding: '2rem' }}>No daily ad performance rows for the current selection.</td></tr>
               )}
             </tbody>
           </table>

@@ -10,7 +10,7 @@ export const QUERY_KEYS = {
   ingestionLog:     ['ingestion_log'] as const,
 };
 
-const STALE_TIME = 1000 * 60 * 60;       // 1 hour
+const STALE_TIME = 1000 * 30;            // 30 seconds (keeps views in sync across pages)
 const GC_TIME    = 1000 * 60 * 60 * 24;  // 24 hours
 
 // ── Fetch helpers ────────────────────────────────────────────────────────────
@@ -24,6 +24,7 @@ function aggregateCampaignMetrics(metrics: CampaignMetric[]): CampaignMetric | n
     clicks: acc.clicks + (Number(metric.clicks) || 0),
     spend_inr: acc.spend_inr + (Number(metric.spend_inr) || 0),
     spend_eur: acc.spend_eur + (Number(metric.spend_eur) || 0),
+    conversions: acc.conversions + (Number(metric.conversions) || 0),
     leads: acc.leads + (Number(metric.leads) || 0),
     video_views: acc.video_views + (Number(metric.video_views) || 0),
     video_completions: acc.video_completions + (Number(metric.video_completions) || 0),
@@ -37,6 +38,7 @@ function aggregateCampaignMetrics(metrics: CampaignMetric[]): CampaignMetric | n
     clicks: 0,
     spend_inr: 0,
     spend_eur: 0,
+    conversions: 0,
     leads: 0,
     video_views: 0,
     video_completions: 0,
@@ -67,6 +69,7 @@ function aggregateCampaignMetrics(metrics: CampaignMetric[]): CampaignMetric | n
     cpm_inr: totals.impressions > 0 ? (totals.spend_inr / totals.impressions) * 1000 : 0,
     cpc_inr: totals.clicks > 0 ? totals.spend_inr / totals.clicks : 0,
     cpl_inr: totals.leads > 0 ? totals.spend_inr / totals.leads : 0,
+    conversions: totals.conversions,
     leads: totals.leads,
     video_views: totals.video_views,
     video_completions: totals.video_completions,
@@ -98,6 +101,7 @@ async function fetchCampaignMetrics(funnelStage?: FunnelStage): Promise<Campaign
         cpm_inr,
         cpc_inr,
         cpl_inr,
+        conversions,
         leads,
         video_views,
         video_completions,

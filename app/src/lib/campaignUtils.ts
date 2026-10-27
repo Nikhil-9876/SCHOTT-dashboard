@@ -114,6 +114,8 @@ export interface AggregatedAd {
   ctr: number;
   engagements: number;
   landing_page_clicks: number;
+  conversions: number;
+  leads: number;
   creative_url: string | null;
   reference: string | null;
   thumbnail_url: string | null;
@@ -153,6 +155,8 @@ export function aggregateAdsByCreative(
       existing.clicks      += row.clicks      ?? 0;
       existing.engagements += row.engagements ?? 0;
       existing.landing_page_clicks              += row.landing_page_clicks              ?? 0;
+      existing.conversions                      += row.conversions                      ?? 0;
+      existing.leads                            += row.leads                            ?? 0;
       existing.video_views                      += row.video_views                      ?? 0;
       existing.video_completions                += row.video_completions                ?? 0;
       existing.video_starts                     += row.video_starts                     ?? 0;
@@ -194,6 +198,8 @@ export function aggregateAdsByCreative(
         ctr:           row.ctr    ?? 0,
         engagements:   row.engagements ?? 0,
         landing_page_clicks:              row.landing_page_clicks              ?? 0,
+        conversions:                      row.conversions                      ?? 0,
+        leads:                            row.leads                            ?? 0,
         creative_url:  row.creative_url  ?? null,
         reference:     row.reference     ?? null,
         thumbnail_url: row.thumbnail_url ?? null,
